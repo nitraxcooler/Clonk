@@ -1,6 +1,6 @@
 # Use the MSYS/clang64 toolchain if present to reliably produce x86_64-elf ELF objects
-CC = C:/msys64/clang64/bin/clang
-LD = C:/msys64/clang64/bin/ld.lld
+CC = clang
+LD = ld.lld
 TARGET_TRIPLE = x86_64-elf
 
 BUILD_DIR = build
