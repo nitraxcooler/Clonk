@@ -29,6 +29,14 @@ static void kprint_u64(uint64_t value, uint32_t fg_color) {
     }
 }
 
+static void kprint_hex64(uint64_t value, uint32_t fg_color) {
+    static const char digits[] = "0123456789ABCDEF";
+    kprint("0x", fg_color);
+    for (int shift = 60; shift >= 0; shift -= 4) {
+        kputc(digits[(value >> shift) & 0xF], fg_color);
+    }
+}
+
 #define CMD_BUFFER_SIZE 256
 static char cmd_buffer[CMD_BUFFER_SIZE];
 static size_t cmd_len = 0;
@@ -64,6 +72,7 @@ static void parse_command(const char *cmd) {
         kprint("  mem     - Display physical memory statistics\n", 0xFFFFFF);
         kprint("  vmem    - Display virtual memory statistics\n", 0xFFFFFF);
         kprint("  panic   - Trigger a deliberate kernel panic\n", 0xFFFFFF);
+        kprint("  pfault  - Trigger a controlled page fault\n", 0xFFFFFF);
     } else if (strcmp(cmd, "clear") == 0) {
         kclear();
     } else if (strcmp(cmd, "version") == 0) {
@@ -108,14 +117,16 @@ static void parse_command(const char *cmd) {
             return;
         }
 
-        kprint("Virtual Memory\n", 0x00FF00);
-        kprint("--------------\n", 0x00FF00);
+        kprint("MyOS Virtual Memory Information\n", 0x00FF00);
         kprint("Page size:       ", 0xFFFFFF);
         kprint_u64(VMM_PAGE_SIZE, 0xFFFFFF);
         kprint(" bytes\n", 0xFFFFFF);
-        kprint("Paging:          enabled\n", 0xFFFFFF);
-        kprint("PML4:            0x", 0xFFFFFF);
-        kprint_u64(vm_get_active_pml4(), 0xFFFFFF);
+        kprint("Paging:          ENABLED\n", 0xFFFFFF);
+        kprint("Current CR3:     ", 0xFFFFFF);
+        kprint_hex64(vm_get_cr3(), 0xFFFFFF);
+        kprint("\n", 0xFFFFFF);
+        kprint("PML4:            ", 0xFFFFFF);
+        kprint_hex64(vm_get_active_pml4(), 0xFFFFFF);
         kprint("\n", 0xFFFFFF);
         kprint("Mapped pages:    ", 0xFFFFFF);
         kprint_u64(vm_get_mapped_pages(), 0xFFFFFF);
@@ -124,7 +135,27 @@ static void parse_command(const char *cmd) {
         kprint_u64(vm_get_page_table_count(), 0xFFFFFF);
         kprint("\n", 0xFFFFFF);
     } else if (strcmp(cmd, "panic") == 0) {
-        kernel_panic("Manual panic test requested.");
+        kernel_panic("Manual panic requested.");
+    } else if (strcmp(cmd, "pfault") == 0) {
+        /* Development-only controlled page-fault test.
+         *
+         * This address (0xfffff00000000000) is canonical (PML4 index
+         * 0x1E0) and is never used by Limine, MyOS's kernel, the HHDM
+         * mapping, or the identity map. We still defensively verify it is
+         * unmapped before deliberately faulting, so the test can never
+         * corrupt live kernel memory. When the fault fires, the CPU
+         * delivers vector 14, our ISR captures CR2 and the error code,
+         * and the diagnostic page-fault panic is shown. */
+        const uint64_t test_address = 0xfffff00000000000ULL;
+
+        if (vm_is_mapped(test_address)) {
+            kprint("pfault: address is unexpectedly mapped; aborting.\n", 0xFF0000);
+        } else {
+            kprint("Triggering page fault at ", 0xFFFFFF);
+            kprint_hex64(test_address, 0xFFFFFF);
+            kprint("\n", 0xFFFFFF);
+            *(volatile uint64_t *)test_address = 0x123456789ABCDEF0ULL;
+        }
     } else if (strncmp(cmd, "echo ", 5) == 0) {
         kprint(cmd + 5, 0xFFFFFF);
         kprint("\n", 0xFFFFFF);

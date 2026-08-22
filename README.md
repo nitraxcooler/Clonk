@@ -21,6 +21,8 @@ The long-term goal is to grow MyOS from a command-line kernel into a complete op
 * CPU exception handling
 * Full-screen Kernel Panic diagnostics
 * Physical Memory Manager (PMM)
+* Virtual Memory / Paging (4-level paging, PMM-allocated page tables)
+* Page fault diagnostics (CR2 capture + error-code decoding)
 * Keyboard driver
 * Custom bitmap font renderer
 * Command Line Interface (CLI)
@@ -36,6 +38,8 @@ The long-term goal is to grow MyOS from a command-line kernel into a complete op
 | `clear`   | Clear the screen                   |
 | `panic`   | Trigger a test Kernel Panic        |
 | `mem`     | Display physical memory statistics |
+| `vmem`    | Display virtual memory statistics  |
+| `pfault`  | Trigger a controlled page fault    |
 
 ---
 
@@ -72,15 +76,27 @@ MyOS/
 
 ### Requirements
 
-* Arch Linux or WSL (recommended)
-* GCC
+* Linux / WSL (recommended) or Windows with MSYS2
+* A C compiler and linker that can produce x86-64 ELF freestanding objects:
+  * Linux/WSL: `gcc` + GNU `ld` (or `clang` + `ld.lld`)
+  * Windows: the MSYS2/clang64 toolchain (`clang` + `ld.lld`)
 * GNU Make
-* NASM / GNU assembler
 * QEMU
 * xorriso
 * Limine (included under `third_party/`)
 
 ### Build
+
+The build system auto-detects the host:
+
+* On **Windows** it uses the MSYS2/clang64 toolchain (`C:/msys64/clang64/bin`).
+* On **Linux/WSL** it uses the system `cc`/`ld`.
+
+You can override the toolchain explicitly, e.g.:
+
+```bash
+make CC=clang LD=ld.lld
+```
 
 ```bash
 make clean
@@ -138,14 +154,14 @@ This keeps the project easier to debug and helps ensure new features don't break
 * [x] Exception handling
 * [x] Kernel Panic
 * [x] Physical Memory Manager
+* [x] Virtual Memory / Paging
+* [x] Page fault diagnostics
 * [x] CLI
 * [x] Keyboard input
 * [x] Custom font rendering
 
 ### In Progress
 
-* [ ] Virtual Memory / Paging
-* [ ] Page fault diagnostics
 * [ ] Kernel heap (`kmalloc` / `kfree`)
 
 ### Planned

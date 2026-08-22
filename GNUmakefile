@@ -1,7 +1,18 @@
-# Use the MSYS/clang64 toolchain if present to reliably produce x86_64-elf ELF objects
+# Host-aware toolchain selection.
+# On Windows the MSYS/clang64 toolchain reliably produces x86_64-elf objects.
+# On Linux/WSL (and other Unix-like hosts) the system compiler/linker is used;
+# both produce x86-64 ELF freestanding objects for this target.
+TARGET_TRIPLE = x86_64-elf
+
+# Note: plain "=" (not "?=") is required here because GNU make has a built-in
+# default of CC=cc / LD=ld, which would defeat "?=" and break the Windows path.
+ifeq ($(OS),Windows_NT)
 CC = C:/msys64/clang64/bin/clang
 LD = C:/msys64/clang64/bin/ld.lld
-TARGET_TRIPLE = x86_64-elf
+else
+CC = cc
+LD = ld
+endif
 
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
@@ -68,7 +79,7 @@ $(OBJ_DIR)/%.o: src/%.c
 
 $(OBJ_DIR)/%.o: src/%.s
 	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(KERNEL): $(OBJS) linker.lds
 	mkdir -p $(dir $@)

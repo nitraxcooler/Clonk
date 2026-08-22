@@ -5,6 +5,7 @@
 #include "graphics/font.h"
 #include "kernel/panic.h"
 #include "arch/x86_64/io.h"
+#include "lib/string.h"
 
 extern volatile uint64_t limine_base_revision[3];
 extern volatile struct limine_framebuffer_request framebuffer_request;
@@ -132,15 +133,41 @@ static void panic_render_exception_details(const char *name, uint8_t vector,
 static void panic_render_page_fault(uint64_t fault_address, uint64_t error_code,
                                   uint64_t rip, uint64_t cs, uint64_t rflags,
                                   uint64_t rsp, uint64_t ss) {
-    panic_draw_string("Fault address: ", 32, 200, 0xFFD5D5, 0x000000);
-    panic_draw_hex64(fault_address, 32 + 16 * 8, 200, 0xFFFFFF);
-    panic_draw_string("Error code: ", 32, 218, 0xFFD5D5, 0x000000);
-    panic_draw_hex64(error_code, 32 + 13 * 8, 218, 0xFFFFFF);
-    panic_draw_string("RIP: ", 32, 236, 0xFFD5D5, 0x000000);
-    panic_draw_hex64(rip, 32 + 7 * 8, 236, 0xFFFFFF);
+    panic_draw_string("Fault address: ", 32, 186, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(fault_address, 32 + 16 * 8, 186, 0xFFFFFF);
+    panic_draw_string("Error code: ", 32, 204, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(error_code, 32 + 13 * 8, 204, 0xFFFFFF);
+
+    /* Decode the mandatory page-fault error-code bits:
+     *  bit 0 (P)  0 = not present, 1 = protection violation
+     *  bit 1 (W/R) 0 = read,       1 = write
+     *  bit 2 (U/S) 0 = supervisor, 1 = user                  */
+    const char *what = ((error_code & 0x1U) != 0U) ? "protection violation" : "not present";
+    const char *op   = ((error_code & 0x2U) != 0U) ? "write" : "read";
+    const char *who  = ((error_code & 0x4U) != 0U) ? "user" : "supervisor";
+
+    panic_draw_string("Type: ", 32, 222, 0xFFD5D5, 0x000000);
+    panic_draw_string(what, 32 + 7 * 8, 222, 0xFFFFFF, 0x000000);
+    panic_draw_string("Access: ", 32, 240, 0xFFD5D5, 0x000000);
+    panic_draw_string(op, 32 + 9 * 8, 240, 0xFFFFFF, 0x000000);
+    panic_draw_string(" ", 32 + 9 * 8 + (uint32_t)(strlen(op) * 8), 240, 0xFFFFFF, 0x000000);
+    panic_draw_string("by ", 32 + 9 * 8 + (uint32_t)(strlen(op) * 8) + 8, 240, 0xFFFFFF, 0x000000);
+    panic_draw_string(who, 32 + 9 * 8 + (uint32_t)(strlen(op) * 8) + 40, 240, 0xFFFFFF, 0x000000);
+
+    panic_draw_string("RIP: ", 32, 258, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(rip, 32 + 7 * 8, 258, 0xFFFFFF);
+
+    panic_draw_string("CS: ", 32, 276, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(cs, 32 + 6 * 8, 276, 0xFFFFFF);
+
+    panic_draw_string("RFLAGS: ", 32, 294, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(rflags, 32 + 10 * 8, 294, 0xFFFFFF);
+
     if (rsp != 0 || ss != 0) {
-        panic_draw_string("RSP: ", 32, 254, 0xFFD5D5, 0x000000);
-        panic_draw_hex64(rsp, 32 + 7 * 8, 254, 0xFFFFFF);
+        panic_draw_string("RSP: ", 32, 312, 0xFFD5D5, 0x000000);
+        panic_draw_hex64(rsp, 32 + 7 * 8, 312, 0xFFFFFF);
+        panic_draw_string("SS: ", 32, 330, 0xFFD5D5, 0x000000);
+        panic_draw_hex64(ss, 32 + 6 * 8, 330, 0xFFFFFF);
     }
 }
 
