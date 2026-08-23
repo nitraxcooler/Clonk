@@ -39,11 +39,14 @@ C_SOURCES = \
     src/kernel/main.c \
     src/kernel/pmm.c \
     src/kernel/vmm.c \
+    src/kernel/heap.c \
     src/kernel/panic.c \
     src/graphics/font.c \
     src/arch/x86_64/idt.c \
     src/drivers/keyboard/keyboard.c \
-    src/lib/string.c
+    src/lib/string.c \
+    src/lib/mem.c \
+    src/shell/shell.c
 
 ASM_SOURCES = src/arch/x86_64/isr.s
 

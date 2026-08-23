@@ -7,6 +7,7 @@
 #include "arch/x86_64/io.h"
 #include "kernel/pmm.h"
 #include "kernel/vmm.h"
+#include "kernel/heap.h"
 
 /* Minimal serial debug helpers (COM1 0x3F8) used only for headless debugging */
 static inline void serial_putc(char c) {
@@ -163,6 +164,12 @@ void _start(void) {
     pmm_self_test();
     serial_write("BOOT: running VM self-test\n");
     vm_self_test();
+
+    serial_write("BOOT: initializing heap\n");
+    heap_init();
+    serial_write("BOOT: running heap self-test\n");
+    heap_self_test();
+    kprint("Heap initialized\n", 0x00FF00);
 
     serial_write("BOOT: ready for CLI\n");
     kprint("MyOS:> ", 0x00FFFF);
