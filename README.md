@@ -4,8 +4,6 @@
 
 
 
-\
-
 MyOS is a personal operating system project focused on learning how operating systems work from the hardware up. Instead of building on Linux or another existing kernel, MyOS is developed as its own kernel with custom drivers, memory management, and graphics.
 
 The long-term goal is to grow MyOS from a command-line kernel into a complete operating system with its own filesystem (**MyBread**), graphical desktop (**MyGUI**), and userspace.
