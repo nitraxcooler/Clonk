@@ -72,7 +72,7 @@ MyOS/
 
 ### Requirements
 
-* Arch Linux or WSL (recommended)
+* Any form of Linux or WSL (recommended)
 * GCC
 * GNU Make
 * NASM / GNU assembler
