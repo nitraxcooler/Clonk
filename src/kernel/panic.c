@@ -129,19 +129,93 @@ static void panic_render_exception_details(const char *name, uint8_t vector,
     panic_draw_string("System halted. Manual restart required.", 32, 330, 0xFFEEEE, 0x000000);
 }
 
+void decode_page_error(uint64_t error, pf_decode *out) {
+    if (out == NULL) {
+        return;
+    }
+    out->present     = (error & 0x1ULL) != 0;
+    out->write       = (error & 0x2ULL) != 0;
+    out->user        = (error & 0x4ULL) != 0;
+    out->reserved    = (error & 0x8ULL) != 0;
+    out->instruction = (error & 0x10ULL) != 0;
+}
+
+static void panic_register_value(uint32_t row, uint32_t col, const char *name, uint64_t value) {
+    panic_draw_string(name, col, row, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(value, col + 5 * 8, row, 0xFFFFFF);
+}
+
 static void panic_render_page_fault(uint64_t fault_address, uint64_t error_code,
                                   uint64_t rip, uint64_t cs, uint64_t rflags,
-                                  uint64_t rsp, uint64_t ss) {
-    panic_draw_string("Fault address: ", 32, 200, 0xFFD5D5, 0x000000);
-    panic_draw_hex64(fault_address, 32 + 16 * 8, 200, 0xFFFFFF);
-    panic_draw_string("Error code: ", 32, 218, 0xFFD5D5, 0x000000);
-    panic_draw_hex64(error_code, 32 + 13 * 8, 218, 0xFFFFFF);
-    panic_draw_string("RIP: ", 32, 236, 0xFFD5D5, 0x000000);
-    panic_draw_hex64(rip, 32 + 7 * 8, 236, 0xFFFFFF);
-    if (rsp != 0 || ss != 0) {
-        panic_draw_string("RSP: ", 32, 254, 0xFFD5D5, 0x000000);
-        panic_draw_hex64(rsp, 32 + 7 * 8, 254, 0xFFFFFF);
+                                  uint64_t rsp, uint64_t ss,
+                                  const cpu_reg_frame *regs) {
+    pf_decode d;
+    decode_page_error(error_code, &d);
+
+    panic_draw_string("Fault Address: ", 32, 200, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(fault_address, 32 + 15 * 8, 200, 0xFFFFFF);
+
+    panic_draw_string("RIP:    ", 32, 218, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(rip, 32 + 9 * 8, 218, 0xFFFFFF);
+    panic_draw_string("CS:     ", 32 + 26 * 8, 218, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(cs, 32 + 30 * 8, 218, 0xFFFFFF);
+
+    panic_draw_string("RSP:    ", 32, 236, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(rsp, 32 + 9 * 8, 236, 0xFFFFFF);
+    panic_draw_string("RFLAGS: ", 32 + 26 * 8, 236, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(rflags, 32 + 35 * 8, 236, 0xFFFFFF);
+
+    panic_draw_string("Error Code: ", 32, 254, 0xFFD5D5, 0x000000);
+    panic_draw_hex64(error_code, 32 + 13 * 8, 254, 0xFFFFFF);
+
+    /* Decoded page-fault error bits (x86-64 CR2 / error-code semantics). */
+    panic_draw_string("Present: ", 32, 282, 0xFFD5D5, 0x000000);
+    panic_draw_string(d.present ? "Yes" : "No", 32 + 9 * 8, 282, 0xFFFFFF, 0x000000);
+    panic_draw_string("Write: ", 32 + 20 * 8, 282, 0xFFD5D5, 0x000000);
+    panic_draw_string(d.write ? "Yes" : "No", 32 + 27 * 8, 282, 0xFFFFFF, 0x000000);
+    panic_draw_string("User: ", 32 + 38 * 8, 282, 0xFFD5D5, 0x000000);
+    panic_draw_string(d.user ? "Yes" : "No", 32 + 44 * 8, 282, 0xFFFFFF, 0x000000);
+
+    panic_draw_string("Reserved: ", 32, 300, 0xFFD5D5, 0x000000);
+    panic_draw_string(d.reserved ? "Yes" : "No", 32 + 10 * 8, 300, 0xFFFFFF, 0x000000);
+    panic_draw_string("Instruction: ", 32 + 24 * 8, 300, 0xFFD5D5, 0x000000);
+    panic_draw_string(d.instruction ? "Yes" : "No", 32 + 37 * 8, 300, 0xFFFFFF, 0x000000);
+
+    /* Explain what the decoded state means. */
+    if (d.reserved) {
+        panic_draw_string("Type: reserved-bit violation", 32, 318, 0xFFEEEE, 0x000000);
+    } else if (!d.present) {
+        panic_draw_string("Type: page not present", 32, 318, 0xFFEEEE, 0x000000);
+    } else {
+        panic_draw_string("Type: protection violation (page present)", 32, 318, 0xFFEEEE, 0x000000);
     }
+
+    /* Full register snapshot captured by the ISR. */
+    panic_draw_string("CPU register snapshot at fault:", 32, 352, 0xFFDDDD, 0x000000);
+
+            /* Left column and right column for the 15 general-purpose registers.
+     * Left label+value spans up to col+184; keep the right column far
+     * enough to avoid text overlap. */
+    const uint32_t lx = 32;
+    const uint32_t rx = 32 + 36 * 8;   /* right-hand column */
+
+    panic_register_value(374, lx, "RAX  ", regs ? regs->rax : 0);
+    panic_register_value(374, rx, "RBX  ", regs ? regs->rbx : 0);
+    panic_register_value(392, lx, "RCX  ", regs ? regs->rcx : 0);
+    panic_register_value(392, rx, "RDX  ", regs ? regs->rdx : 0);
+    panic_register_value(410, lx, "RSI  ", regs ? regs->rsi : 0);
+    panic_register_value(410, rx, "RDI  ", regs ? regs->rdi : 0);
+    panic_register_value(428, lx, "RBP  ", regs ? regs->rbp : 0);
+    panic_register_value(428, rx, "R8   ", regs ? regs->r8 : 0);
+    panic_register_value(446, lx, "R9   ", regs ? regs->r9 : 0);
+    panic_register_value(446, rx, "R10  ", regs ? regs->r10 : 0);
+    panic_register_value(464, lx, "R11  ", regs ? regs->r11 : 0);
+    panic_register_value(464, rx, "R12  ", regs ? regs->r12 : 0);
+    panic_register_value(482, lx, "R13  ", regs ? regs->r13 : 0);
+    panic_register_value(482, rx, "R14  ", regs ? regs->r14 : 0);
+    panic_register_value(500, lx, "R15  ", regs ? regs->r15 : 0);
+
+    panic_draw_string("System halted. Manual restart required.", 32, 552, 0xFFEEEE, 0x000000);
 }
 
 void kernel_panic_exception(const char *reason, uint8_t vector, const char *name,
@@ -186,7 +260,8 @@ void kernel_panic_exception(const char *reason, uint8_t vector, const char *name
 void kernel_panic_page_fault(const char *reason, uint8_t vector, const char *name,
                             uint64_t error_code, uint64_t fault_address,
                             uint64_t rip, uint64_t cs, uint64_t rflags,
-                            uint64_t rsp, uint64_t ss) {
+                            uint64_t rsp, uint64_t ss,
+                            const cpu_reg_frame *regs) {
     /* Emit serial diagnostics early */
     panic_serial_write("PANIC: ");
     panic_serial_write(reason);
@@ -219,8 +294,7 @@ void kernel_panic_page_fault(const char *reason, uint8_t vector, const char *nam
     panic_draw_string(name, 32 + 11 * 8, 150, 0xFFFFFF, 0x000000);
     panic_draw_string("Vector: ", 32, 168, 0xFFD5D5, 0x000000);
     panic_draw_hex64(vector, 32 + 9 * 8, 168, 0xFFFFFF);
-    panic_render_page_fault(fault_address, error_code, rip, cs, rflags, rsp, ss);
-    panic_draw_string("System halted. Manual restart required.", 32, 330, 0xFFEEEE, 0x000000);
+    panic_render_page_fault(fault_address, error_code, rip, cs, rflags, rsp, ss, regs);
 
     __asm__ volatile ("cli");
     for (;;) {

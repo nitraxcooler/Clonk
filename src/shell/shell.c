@@ -104,6 +104,8 @@ static void cmd_help(void) {
         "  heap     - Kernel heap stats",
         "  selftest - Re-run all kernel self-tests",
         "  panic    - Trigger a deliberate kernel panic",
+        "  pfault   - Trigger a deliberate page fault",
+        "  badalloc - Trigger out-of-memory (heap exhaustion)",
         NULL
     };
     kprint("Available commands:\n", SHELL_COL_HEAD);
@@ -188,6 +190,24 @@ static void cmd_selftest(void) {
 static void cmd_panic(void) {
     kernel_panic("panic command: manual kernel panic requested.");
 }
+
+static void cmd_pfault(void) {
+    kprint("Triggering deliberate page fault...\n", SHELL_COL_HEAD);
+    volatile uint8_t *bad = (volatile uint8_t *)0x10;
+    (void)*bad;
+    /* Should never reach here */
+    kprint("ERROR: page fault was not triggered.\n", SHELL_COL_ERR);
+}
+
+static void cmd_badalloc(void) {
+    kprint("Triggering out-of-memory...\n", SHELL_COL_HEAD);
+    void *p = kmalloc(HEAP_ARENA_SIZE + 65536);
+    if (p != NULL) {
+        kfree(p);
+        kprint("ERROR: oversized allocation unexpectedly succeeded.\n", SHELL_COL_ERR);
+    }
+}
+
 void shell_handle_command(const char *cmdline) {
     if (cmdline == NULL) {
         return;
@@ -219,8 +239,12 @@ void shell_handle_command(const char *cmdline) {
         cmd_heap();
     } else if (strcmp(cmd, "selftest") == 0) {
         cmd_selftest();
-    } else if (strcmp(cmd, "panic") == 0) {
+        } else if (strcmp(cmd, "panic") == 0) {
         cmd_panic();
+    } else if (strcmp(cmd, "pfault") == 0) {
+        cmd_pfault();
+    } else if (strcmp(cmd, "badalloc") == 0) {
+        cmd_badalloc();
     } else {
         kprint("Unknown command: ", SHELL_COL_ERR);
         kprint(cmd, SHELL_COL_ERR);

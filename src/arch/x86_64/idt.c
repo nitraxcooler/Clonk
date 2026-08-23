@@ -126,10 +126,36 @@ void exception_handler_err(uint64_t *stack, uint64_t vector) {
         name = exception_names[vector];
     }
 
-    if (vector == 14) {
+        if (vector == 14) {
         __asm__ volatile ("mov %%cr2, %0" : "=r"(fault_address));
+
+        /* Build a register snapshot from the ISR-saved GPR block.
+         * The ISR stub pushes 15 GPRs (stack[0..14]), then the CPU pushes
+         * the error code (stack[15]) followed by RIP, CS, RFLAGS.
+         * The cpu_reg_frame struct has 15 GPRs + rip + cs + rflags,
+         * so we copy from the stack, skipping the error-code gap. */
+        cpu_reg_frame frame;
+        frame.rax    = stack[0];
+        frame.rbx    = stack[1];
+        frame.rcx    = stack[2];
+        frame.rdx    = stack[3];
+        frame.rsi    = stack[4];
+        frame.rdi    = stack[5];
+        frame.rbp    = stack[6];
+        frame.r8     = stack[7];
+        frame.r9     = stack[8];
+        frame.r10    = stack[9];
+        frame.r11    = stack[10];
+        frame.r12    = stack[11];
+        frame.r13    = stack[12];
+        frame.r14    = stack[13];
+        frame.r15    = stack[14];
+        frame.rip    = rip;
+        frame.cs     = cs;
+        frame.rflags = rflags;
+
         kernel_panic_page_fault("Page Fault", (uint8_t)vector, name, error_code, fault_address,
-                                rip, cs, rflags, rsp, ss);
+                                rip, cs, rflags, rsp, ss, &frame);
         return;
     }
 
