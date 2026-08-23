@@ -141,10 +141,8 @@ This keeps the project easier to debug and helps ensure new features don't break
 * [x] CLI
 * [x] Keyboard input
 * [x] Custom font rendering
-
+* [x] Virtual Memory / Paging
 ### In Progress
-
-* [ ] Virtual Memory / Paging
 * [ ] Page fault diagnostics
 * [ ] Kernel heap (`kmalloc` / `kfree`)
 
