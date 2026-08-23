@@ -19,6 +19,7 @@ The long-term goal is to grow MyOS from a command-line kernel into a complete op
 * CPU exception handling
 * Full-screen Kernel Panic diagnostics
 * Physical Memory Manager (PMM)
+* Virtual Memory Manager (VMM)
 * Keyboard driver
 * Custom bitmap font renderer
 * Command Line Interface (CLI)
@@ -34,6 +35,7 @@ The long-term goal is to grow MyOS from a command-line kernel into a complete op
 | `clear`   | Clear the screen                   |
 | `panic`   | Trigger a test Kernel Panic        |
 | `mem`     | Display physical memory statistics |
+| `vmem`    | Display virtual memory statistics  |
 
 ---
 
