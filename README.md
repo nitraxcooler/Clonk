@@ -4,8 +4,6 @@
 
 
 
-\
-
 MyOS is a personal operating system project focused on learning how operating systems work from the hardware up. Instead of building on Linux or another existing kernel, MyOS is developed as its own kernel with custom drivers, memory management, and graphics.
 
 The long-term goal is to grow MyOS from a command-line kernel into a complete operating system with its own filesystem (**MyBread**), graphical desktop (**MyGUI**), and userspace.
@@ -21,8 +19,12 @@ The long-term goal is to grow MyOS from a command-line kernel into a complete op
 * CPU exception handling
 * Full-screen Kernel Panic diagnostics
 * Physical Memory Manager (PMM)
+<<<<<<< HEAD
 * Virtual Memory / Paging (4-level paging, PMM-allocated page tables)
 * Page fault diagnostics (CR2 capture + error-code decoding)
+=======
+* Virtual Memory Manager (VMM)
+>>>>>>> 05175210acff34ca13ae975de5350d2558de3b68
 * Keyboard driver
 * Custom bitmap font renderer
 * Command Line Interface (CLI)
@@ -39,7 +41,10 @@ The long-term goal is to grow MyOS from a command-line kernel into a complete op
 | `panic`   | Trigger a test Kernel Panic        |
 | `mem`     | Display physical memory statistics |
 | `vmem`    | Display virtual memory statistics  |
+<<<<<<< HEAD
 | `pfault`  | Trigger a controlled page fault    |
+=======
+>>>>>>> 05175210acff34ca13ae975de5350d2558de3b68
 
 ---
 
@@ -76,10 +81,15 @@ MyOS/
 
 ### Requirements
 
+<<<<<<< HEAD
 * Linux / WSL (recommended) or Windows with MSYS2
 * A C compiler and linker that can produce x86-64 ELF freestanding objects:
   * Linux/WSL: `gcc` + GNU `ld` (or `clang` + `ld.lld`)
   * Windows: the MSYS2/clang64 toolchain (`clang` + `ld.lld`)
+=======
+* Any form of Linux or WSL (recommended)
+* GCC
+>>>>>>> 05175210acff34ca13ae975de5350d2558de3b68
 * GNU Make
 * QEMU
 * xorriso
@@ -159,9 +169,13 @@ This keeps the project easier to debug and helps ensure new features don't break
 * [x] CLI
 * [x] Keyboard input
 * [x] Custom font rendering
-
+* [x] Virtual Memory / Paging
 ### In Progress
+<<<<<<< HEAD
 
+=======
+* [ ] Page fault diagnostics
+>>>>>>> 05175210acff34ca13ae975de5350d2558de3b68
 * [ ] Kernel heap (`kmalloc` / `kfree`)
 
 ### Planned
