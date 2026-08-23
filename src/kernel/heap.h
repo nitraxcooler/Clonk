@@ -21,6 +21,9 @@
 #define HEAP_ALIGN         16UL
 #define HEAP_BLOCK_ALIGN   16UL
 
+/* 1 GiB reserved virtual arena. */
+#define HEAP_ARENA_SIZE    0x40000000ULL
+
 /* 0x48454150514D4F4D = "HEAPQMOM" stored in the header of used blocks. */
 #define HEAP_MAGIC         0x48454150514D4F4DULL
 

@@ -40,7 +40,6 @@
 
 /* Canonical high-half region: above the kernel image and the HHDM identity map. */
 #define HEAP_VIRT_BASE  0xffffffffc0000000ULL
-#define HEAP_ARENA_SIZE 0x40000000ULL      /* 1 GiB reserved virtual arena   */
 #define HEAP_INIT_SIZE  0x10000ULL         /* 64 KiB mapped at init          */
 
 /* Largest payload size we can turn into a block without integer overflow. */
