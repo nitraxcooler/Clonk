@@ -9,6 +9,8 @@
 #include "kernel/vmm.h"
 #include "kernel/heap.h"
 #include "kernel/blockdev.h"
+#include "fs/vfs.h"
+#include "fs/fat32.h"
 
 /* Minimal serial debug helpers (COM1 0x3F8) used only for headless debugging */
 static inline void serial_putc(char c) {
@@ -16,6 +18,18 @@ static inline void serial_putc(char c) {
 }
 static void serial_write(const char *s) {
     while (*s) serial_putc(*s++);
+}
+
+/* Temp debug: hex dump over serial for the VFS smoke test. */
+static void vfs_test_ser_hex(uint64_t v) {
+    const char *d = "0123456789ABCDEF";
+    char buf[19];
+    buf[0] = '0'; buf[1] = 'x';
+    for (int i = 15; i >= 0; --i) {
+        buf[2 + (15 - i)] = d[(v >> (i * 4)) & 0xF];
+    }
+    buf[18] = '\0';
+    serial_write(buf);
 }
 
 __attribute__((used, section(".requests")))
@@ -181,6 +195,64 @@ void _start(void) {
     serial_write("BOOT: initializing block devices\n");
     blockdev_init();
     serial_write("BOOT: block devices initialized\n");
+
+    serial_write("BOOT: mounting filesystems\n");
+    {
+        static fat32_fs boot_fs; /* lives for the lifetime of the kernel */
+        block_device *rootdev = blockdev_get("ramdisk0");
+        if (rootdev != NULL && fat32_mount(rootdev, &boot_fs) == 0) {
+            vfs_init();
+            if (vfs_do_mount("/", "fat32", rootdev, &fat32_ops, &boot_fs) == 0) {
+                kprint("FAT32 volume mounted on / (ramdisk0)\n", 0x00FF00);
+                serial_write("BOOT: FAT32 mounted on /\n");
+            } else {
+                kprint("Failed to mount FAT32 volume\n", 0x00FFFF);
+                serial_write("BOOT: vfs_do_mount failed\n");
+            }
+        } else {
+            kprint("No FAT32 ramdisk found; filesystem disabled\n", 0x00FFFF);
+            serial_write("BOOT: no mountable FAT32 ramdisk\n");
+        }
+    }
+
+    /* Headless VFS smoke test (serial only): list / and read /HELLO.TXT. */
+    {
+        serial_write("VFS-TEST: ls /\n");
+        for (int i = 0; i < 64; ++i) {
+            char name[VFS_NAME_MAX];
+            uint32_t type = 0;
+            if (vfs_readdir("/", i, name, sizeof(name), &type) != 0) {
+                if (i == 0) serial_write("VFS-TEST: readdir FAILED\n");
+                break;
+            }
+            serial_write("VFS-TEST:   ");
+            serial_write(name);
+            serial_write(type == VFS_TYPE_DIR ? "/\n" : "\n");
+        }
+
+        vfs_file vf;
+        if (vfs_open("/hello.txt", &vf) == 0 && vf.type == VFS_TYPE_FILE) {
+            serial_write("VFS-TEST: opened, size=");
+            vfs_test_ser_hex(vf.size);
+            serial_write("\n");
+            static char vbuf[64];
+            uint64_t got = 0;
+            int ok = (vfs_read(&vf, 0, sizeof(vbuf) - 1, vbuf, &got) == 0 &&
+                      got == vf.size && got > 0);
+            vbuf[got < sizeof(vbuf) ? got : sizeof(vbuf) - 1] = '\0';
+            serial_write(ok ? "VFS-TEST: cat /hello.txt OK\n"
+                            : "VFS-TEST: cat /hello.txt FAILED\n");
+            serial_write("VFS-TEST: got=");
+            vfs_test_ser_hex(got);
+            serial_write("\n");
+            serial_write("VFS-TEST: content: ");
+            serial_write(vbuf);
+            serial_write("\n");
+            vfs_close(&vf);
+        } else {
+            serial_write("VFS-TEST: open /hello.txt FAILED\n");
+        }
+    }
 
     serial_write("BOOT: ready for CLI\n");
     kprint("MyOS:> ", 0x00FFFF);
