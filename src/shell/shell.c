@@ -17,6 +17,7 @@
 #include "kernel/vmm.h"
 #include "kernel/heap.h"
 #include "kernel/blockdev.h"
+#include "fs/vfs.h"
 #include "kernel/panic.h"
 #include "lib/string.h"
 #include "arch/x86_64/io.h"
@@ -108,6 +109,8 @@ static void cmd_help(void) {
         "  pfault   - Trigger a deliberate page fault",
         "  badalloc - Trigger out-of-memory (heap exhaustion)",
         "  blkinfo  - List block devices",
+        "  ls       - List directory (ls or ls /dir)",
+        "  cat      - Print a file (cat /file.txt)",
         NULL
     };
     kprint("Available commands:\n", SHELL_COL_HEAD);
@@ -233,6 +236,69 @@ static void cmd_blkinfo(void) {
     }
 }
 
+static void cmd_ls(const char *path) {
+    char name[VFS_NAME_MAX];
+    uint32_t type;
+    int idx = 0;
+    int shown = 0;
+
+    while (vfs_readdir(path, idx, name, sizeof(name), &type) == 0) {
+        if (type == VFS_TYPE_DIR) {
+            kprint(name, SHELL_COL_HEAD);
+            kprint("/\n", SHELL_COL_HEAD);
+        } else {
+            kprint(name, SHELL_TOK_WHITE);
+            kprint("\n", SHELL_TOK_WHITE);
+        }
+        shown++;
+        idx++;
+    }
+    if (idx == 0) {
+        kprint("ls: cannot read directory: ", SHELL_COL_ERR);
+        kprint(path, SHELL_COL_ERR);
+        kprint("\n", SHELL_COL_ERR);
+    } else if (!shown) {
+        kprint("(empty)\n", SHELL_TOK_WHITE);
+    }
+}
+
+static void cmd_cat(const char *path) {
+    vfs_file f;
+    if (vfs_open(path, &f) != 0) {
+        kprint("cat: no such file: ", SHELL_COL_ERR);
+        kprint(path, SHELL_COL_ERR);
+        kprint("\n", SHELL_COL_ERR);
+        return;
+    }
+    if (f.type != VFS_TYPE_FILE) {
+        kprint("cat: not a file: ", SHELL_COL_ERR);
+        kprint(path, SHELL_COL_ERR);
+        kprint("\n", SHELL_COL_ERR);
+        vfs_close(&f);
+        return;
+    }
+
+    static char buf[513];
+    uint64_t off = 0;
+    while (off < f.size) {
+        uint64_t chunk = f.size - off;
+        if (chunk > 512) chunk = 512;
+        uint64_t got = 0;
+        if (vfs_read(&f, off, chunk, buf, &got) != 0 || got == 0) {
+            break;
+        }
+        buf[got] = '\0';
+        kprint(buf, SHELL_TOK_WHITE);
+        off += got;
+    }
+    kprint("\n", SHELL_TOK_WHITE);
+
+    kprint("[", SHELL_COL_HEAD);
+    shell_print_u64(f.size);
+    kprint(" bytes]\n", SHELL_COL_HEAD);
+    vfs_close(&f);
+}
+
 void shell_handle_command(const char *cmdline) {
     if (cmdline == NULL) {
         return;
@@ -272,6 +338,10 @@ void shell_handle_command(const char *cmdline) {
         cmd_badalloc();
     } else if (strcmp(cmd, "blkinfo") == 0) {
         cmd_blkinfo();
+    } else if (strcmp(cmd, "ls") == 0) {
+        cmd_ls(n >= 2 ? tok(1) : "/");
+    } else if (strcmp(cmd, "cat") == 0 && n >= 2) {
+        cmd_cat(tok(1));
     } else {
         kprint("Unknown command: ", SHELL_COL_ERR);
         kprint(cmd, SHELL_COL_ERR);
