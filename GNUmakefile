@@ -41,9 +41,11 @@ C_SOURCES = \
     src/kernel/vmm.c \
     src/kernel/heap.c \
     src/kernel/panic.c \
+    src/kernel/blockdev.c \
     src/graphics/font.c \
     src/arch/x86_64/idt.c \
     src/drivers/keyboard/keyboard.c \
+    src/drivers/storage/ramdisk.c \
     src/lib/string.c \
     src/lib/mem.c \
     src/shell/shell.c
@@ -56,6 +58,9 @@ DEPS = $(OBJS:.o=.d)
 
 ISO_CONFIG = $(ISO_BOOT_DIR)/limine.conf
 ISO_KERNEL = $(ISO_BOOT_DIR)/myos.elf
+ISO_FATIMG = $(ISO_BOOT_DIR)/fat32.img
+FATIMG_SRC = tools/make_fat32_img.py
+FATIMG = $(BUILD_DIR)/fat32.img
 ISO_LIMINE_FILES = \
     $(ISO_BOOT_DIR)/limine-bios-cd.bin \
     $(ISO_BOOT_DIR)/limine-bios.sys \
@@ -85,6 +90,14 @@ $(ISO_KERNEL): $(KERNEL)
 	mkdir -p $(dir $@)
 	cp $< $@
 
+$(FATIMG): $(FATIMG_SRC)
+	@mkdir -p $(BUILD_DIR)
+	python3 $(FATIMG_SRC)
+
+$(ISO_FATIMG): $(FATIMG)
+	@mkdir -p $(dir $@)
+	cp $< $@
+
 $(ISO_BOOT_DIR)/limine-bios-cd.bin: $(LIMINE_DIR)/limine-bios-cd.bin
 	mkdir -p $(dir $@)
 	cp $< $@
@@ -100,7 +113,7 @@ $(ISO_BOOT_DIR)/limine-uefi-cd.bin: $(LIMINE_DIR)/limine-uefi-cd.bin
 $(LIMINE_TOOL):
 	$(MAKE) -C $(LIMINE_DIR)
 
-$(ISO): $(ISO_KERNEL) $(ISO_CONFIG) $(ISO_LIMINE_FILES) $(LIMINE_TOOL)
+$(ISO): $(ISO_KERNEL) $(ISO_CONFIG) $(ISO_FATIMG) $(ISO_LIMINE_FILES) $(LIMINE_TOOL)
 	mkdir -p $(dir $@)
 	xorriso -as mkisofs -b boot/limine-bios-cd.bin \
 	    -no-emul-boot -boot-load-size 4 -boot-info-table \

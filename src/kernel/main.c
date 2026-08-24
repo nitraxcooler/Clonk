@@ -8,6 +8,7 @@
 #include "kernel/pmm.h"
 #include "kernel/vmm.h"
 #include "kernel/heap.h"
+#include "kernel/blockdev.h"
 
 /* Minimal serial debug helpers (COM1 0x3F8) used only for headless debugging */
 static inline void serial_putc(char c) {
@@ -41,6 +42,12 @@ volatile struct limine_hhdm_request limine_hhdm_request = {
 __attribute__((used, section(".requests")))
 volatile struct limine_executable_address_request limine_executable_address_request = {
     .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST_ID,
+    .revision = 0
+};
+
+__attribute__((used, section(".requests")))
+volatile struct limine_module_request limine_module_request = {
+    .id = LIMINE_MODULE_REQUEST_ID,
     .revision = 0
 };
 
@@ -168,8 +175,12 @@ void _start(void) {
     serial_write("BOOT: initializing heap\n");
     heap_init();
     serial_write("BOOT: running heap self-test\n");
-    heap_self_test();
+        heap_self_test();
     kprint("Heap initialized\n", 0x00FF00);
+
+    serial_write("BOOT: initializing block devices\n");
+    blockdev_init();
+    serial_write("BOOT: block devices initialized\n");
 
     serial_write("BOOT: ready for CLI\n");
     kprint("MyOS:> ", 0x00FFFF);
