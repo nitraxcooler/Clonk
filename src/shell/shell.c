@@ -16,6 +16,7 @@
 #include "kernel/pmm.h"
 #include "kernel/vmm.h"
 #include "kernel/heap.h"
+#include "kernel/blockdev.h"
 #include "kernel/panic.h"
 #include "lib/string.h"
 #include "arch/x86_64/io.h"
@@ -106,6 +107,7 @@ static void cmd_help(void) {
         "  panic    - Trigger a deliberate kernel panic",
         "  pfault   - Trigger a deliberate page fault",
         "  badalloc - Trigger out-of-memory (heap exhaustion)",
+        "  blkinfo  - List block devices",
         NULL
     };
     kprint("Available commands:\n", SHELL_COL_HEAD);
@@ -208,6 +210,29 @@ static void cmd_badalloc(void) {
     }
 }
 
+static void cmd_blkinfo(void) {
+    uint64_t count = blockdev_get_count();
+    kprint("Block devices: ", SHELL_COL_OK);
+    shell_print_u64(count);
+    kprint("\n", SHELL_TOK_WHITE);
+
+    for (uint64_t i = 0; i < count; ++i) {
+        block_device *dev = blockdev_get_by_index((int)i);
+        if (dev == NULL) {
+            continue;
+        }
+        kprint("  [", SHELL_TOK_WHITE);
+        shell_print_u64(i);
+        kprint("] ", SHELL_TOK_WHITE);
+        kprint(dev->name, SHELL_TOK_WHITE);
+        kprint("  sectors=", SHELL_TOK_WHITE);
+        shell_print_u64(blockdev_sector_count(dev));
+        kprint("  size=", SHELL_TOK_WHITE);
+        shell_print_u64(blockdev_sector_size(dev));
+        kprint("\n", SHELL_TOK_WHITE);
+    }
+}
+
 void shell_handle_command(const char *cmdline) {
     if (cmdline == NULL) {
         return;
@@ -239,12 +264,14 @@ void shell_handle_command(const char *cmdline) {
         cmd_heap();
     } else if (strcmp(cmd, "selftest") == 0) {
         cmd_selftest();
-        } else if (strcmp(cmd, "panic") == 0) {
+    } else if (strcmp(cmd, "panic") == 0) {
         cmd_panic();
     } else if (strcmp(cmd, "pfault") == 0) {
         cmd_pfault();
     } else if (strcmp(cmd, "badalloc") == 0) {
         cmd_badalloc();
+    } else if (strcmp(cmd, "blkinfo") == 0) {
+        cmd_blkinfo();
     } else {
         kprint("Unknown command: ", SHELL_COL_ERR);
         kprint(cmd, SHELL_COL_ERR);
