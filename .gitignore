@@ -7,3 +7,4 @@
 /iso_root/boot/limine-bios-cd.bin
 /iso_root/boot/limine-bios.sys
 /iso_root/boot/limine-uefi-cd.bin
+__pycache__/
