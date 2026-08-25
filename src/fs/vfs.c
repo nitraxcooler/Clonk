@@ -132,6 +132,18 @@ int vfs_read(vfs_file *f, uint64_t offset, uint64_t size,
     return m->ops.read(m, f, offset, size, buf, got);
 }
 
+int vfs_write(vfs_file *f, uint64_t offset, uint64_t size,
+              const void *buf, uint64_t *written) {
+    if (f == NULL || f->mount == NULL || buf == NULL || written == NULL) {
+        return -1;
+    }
+    vfs_mount *m = (vfs_mount *)f->mount;
+    if (m->ops.write == NULL) {
+        return -1;
+    }
+    return m->ops.write(m, f, offset, size, buf, written);
+}
+
 int vfs_readdir(const char *path, int idx, char *name,
                 size_t name_cap, uint32_t *type) {
     if (path == NULL || name == NULL) {
@@ -153,4 +165,37 @@ int vfs_stat(const char *path, uint64_t *size, uint32_t *type) {
         return -1;
     }
     return m->ops.stat(m, path, size, type);
+}
+
+int vfs_create(const char *path) {
+    if (path == NULL) {
+        return -1;
+    }
+    vfs_mount *m = vfs_find_mount(path);
+    if (m == NULL || m->ops.create == NULL) {
+        return -1;
+    }
+    return m->ops.create(m, path);
+}
+
+int vfs_unlink(const char *path) {
+    if (path == NULL) {
+        return -1;
+    }
+    vfs_mount *m = vfs_find_mount(path);
+    if (m == NULL || m->ops.unlink == NULL) {
+        return -1;
+    }
+    return m->ops.unlink(m, path);
+}
+
+int vfs_mkdir(const char *path) {
+    if (path == NULL) {
+        return -1;
+    }
+    vfs_mount *m = vfs_find_mount(path);
+    if (m == NULL || m->ops.mkdir == NULL) {
+        return -1;
+    }
+    return m->ops.mkdir(m, path);
 }

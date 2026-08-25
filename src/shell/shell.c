@@ -111,6 +111,10 @@ static void cmd_help(void) {
         "  blkinfo  - List block devices",
         "  ls       - List directory (ls or ls /dir)",
         "  cat      - Print a file (cat /file.txt)",
+        "  touch    - Create an empty file",
+        "  write    - Write text to a file (write /f.txt hello)",
+        "  rm       - Delete a file",
+        "  mkdir    - Create a directory",
         NULL
     };
     kprint("Available commands:\n", SHELL_COL_HEAD);
@@ -297,6 +301,83 @@ static void cmd_cat(const char *path) {
     shell_print_u64(f.size);
     kprint(" bytes]\n", SHELL_COL_HEAD);
     vfs_close(&f);
+}
+
+/* Create a new, empty file. */
+static void cmd_touch(const char *path) {
+    if (vfs_create(path) != 0) {
+        kprint("touch: cannot create: ", SHELL_COL_ERR);
+        kprint(path, SHELL_COL_ERR);
+        kprint("\n", SHELL_COL_ERR);
+        return;
+    }
+    kprint("created ", SHELL_COL_OK);
+    kprint(path, SHELL_TOK_WHITE);
+    kprint("\n", SHELL_TOK_WHITE);
+}
+
+/* Write a literal string into a file (overwrites from offset 0). */
+static void cmd_write(const char *path, const char *text) {
+    vfs_file f;
+    if (vfs_open(path, &f) != 0) {
+        /* Auto-create like a shell redirect would. */
+        if (vfs_create(path) != 0 || vfs_open(path, &f) != 0) {
+            kprint("write: cannot open: ", SHELL_COL_ERR);
+            kprint(path, SHELL_COL_ERR);
+            kprint("\n", SHELL_COL_ERR);
+            return;
+        }
+    }
+    if (f.type != VFS_TYPE_FILE) {
+        kprint("write: not a file: ", SHELL_COL_ERR);
+        kprint(path, SHELL_COL_ERR);
+        kprint("\n", SHELL_COL_ERR);
+        vfs_close(&f);
+        return;
+    }
+    uint64_t written = 0;
+    uint64_t len = strlen(text);
+    int rc = vfs_write(&f, 0, len, text, &written);
+    vfs_close(&f);
+    if (rc != 0 || written != len) {
+        kprint("write: failed (wrote ", SHELL_COL_ERR);
+        shell_print_u64(written);
+        kprint("/", SHELL_COL_ERR);
+        shell_print_u64(len);
+        kprint(" bytes)\n", SHELL_COL_ERR);
+        return;
+    }
+    kprint("wrote ", SHELL_COL_OK);
+    shell_print_u64(written);
+    kprint(" bytes to ", SHELL_TOK_WHITE);
+    kprint(path, SHELL_TOK_WHITE);
+    kprint("\n", SHELL_TOK_WHITE);
+}
+
+/* Delete a file. */
+static void cmd_rm(const char *path) {
+    if (vfs_unlink(path) != 0) {
+        kprint("rm: cannot remove: ", SHELL_COL_ERR);
+        kprint(path, SHELL_COL_ERR);
+        kprint("\n", SHELL_COL_ERR);
+        return;
+    }
+    kprint("removed ", SHELL_COL_OK);
+    kprint(path, SHELL_TOK_WHITE);
+    kprint("\n", SHELL_TOK_WHITE);
+}
+
+/* Create a directory. */
+static void cmd_mkdir(const char *path) {
+    if (vfs_mkdir(path) != 0) {
+        kprint("mkdir: cannot create: ", SHELL_COL_ERR);
+        kprint(path, SHELL_COL_ERR);
+        kprint("\n", SHELL_COL_ERR);
+        return;
+    }
+    kprint("created dir ", SHELL_COL_OK);
+    kprint(path, SHELL_TOK_WHITE);
+    kprint("\n", SHELL_TOK_WHITE);
 }
 
 void shell_handle_command(const char *cmdline) {

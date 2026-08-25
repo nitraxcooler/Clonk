@@ -49,6 +49,11 @@ struct vfs_fs_ops {
     int (*read)(vfs_mount *m, vfs_file *f, uint64_t offset,
                 uint64_t size, void *buf, uint64_t *got);
 
+    /* Write up to `size` bytes starting at `offset`. Sets `*written` to
+     * the number actually written. Returns 0 on success. */
+    int (*write)(vfs_mount *m, vfs_file *f, uint64_t offset,
+                 uint64_t size, const void *buf, uint64_t *written);
+
     /* List directory entries. `idx` is the zero-based entry index.
      * Returns 0 and fills `name`/`type` on success, non-zero past the
      * last entry. */
@@ -58,6 +63,15 @@ struct vfs_fs_ops {
     /* Stat a path: file size and type. Returns 0 on success. */
     int (*stat)(vfs_mount *m, const char *path, uint64_t *size,
                 uint32_t *type);
+
+    /* Create a new file (mode is unused for now). */
+    int (*create)(vfs_mount *m, const char *path);
+
+    /* Delete a file. */
+    int (*unlink)(vfs_mount *m, const char *path);
+
+    /* Create a directory. */
+    int (*mkdir)(vfs_mount *m, const char *path);
 };
 
 struct vfs_mount {
@@ -83,8 +97,14 @@ int      vfs_open(const char *path, vfs_file *out);
 void     vfs_close(vfs_file *f);
 int      vfs_read(vfs_file *f, uint64_t offset, uint64_t size,
                   void *buf, uint64_t *got);
+int      vfs_write(vfs_file *f, uint64_t offset, uint64_t size,
+                  const void *buf, uint64_t *written);
 int      vfs_readdir(const char *path, int idx, char *name,
                      size_t name_cap, uint32_t *type);
 int      vfs_stat(const char *path, uint64_t *size, uint32_t *type);
+
+int      vfs_create(const char *path);
+int      vfs_unlink(const char *path);
+int      vfs_mkdir(const char *path);
 
 #endif
