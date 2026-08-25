@@ -24,8 +24,10 @@ static const char scancode_ascii[128] = {
 };
 
 void keyboard_init(void) {
+    /* Wait for the keyboard controller to be ready, then enable the
+     * keyboard and drain anything already waiting in the buffer. */
     while (inb(0x64) & 2);
-    outb(0x64, 0xAE); 
+    outb(0x64, 0xAE);
 
     while (inb(0x64) & 1) {
         inb(0x60);
@@ -40,7 +42,8 @@ void keyboard_handler(void) {
     uint8_t scancode = inb(0x60);
     outb(0x20, 0x20);
 
-    if (!(scancode & 0x80)) { 
+    /* Ignore key releases (the top bit of a scancode marks them). */
+    if (!(scancode & 0x80)) {
         char ch = scancode_ascii[scancode];
 
         if (ch == '\n') {

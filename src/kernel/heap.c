@@ -1,28 +1,18 @@
 /*
- * MyOS kernel heap implementation.
+ * MyOS kernel heap.
  *
- * Allocator design
- *  ---------------- *
- * The heap is a reserved region of kernel virtual address space at
- * HEAP_VIRT_BASE. Only the prefix up to heap_mapped_bytes has been handed
- * physical pages (scattered pages are fine: VMM maps an arbitrary physical
- * page to the virtual heap page). The rest of the arena is reserved but not
- * mapped.
+ * The heap lives in a reserved region of high-half virtual memory. Only
+ * the part that's actually been handed physical pages is mapped; the rest
+ * of the arena is just reserved address space.
  *
- * Within the mapped region, memory is divided into blocks. Each block has:
+ * Mapped memory is split into blocks. Each block has a small header
+ * (size + magic) and a footer (a copy of the size tag). The footer lets
+ * us find the previous block in O(1) when freeing.
  *
- *     header   size|used bit (8) + reserved magic (8)          -> 16 bytes
- *     footer   a copy of the size|used boundary tag (8)
- *
- * The footer lets a block being freed inspect its predecessor in O(1):
- * the 8 bytes before this block's header are the previous block's footer.
- *
- * Free blocks carry a doubly linked intrusive free list in their payload.
- * Allocation is first-fit; a block is split when it is far larger than the
- * request and the tail returns to the free list.
- *
- * Out-of-memory is reported by returning NULL: kmalloc/kcalloc/krealloc
- * never silently overrun or corrupt memory.
+ * Free blocks are linked together in a doubly-linked list. Allocation is
+ * first-fit: we take the first block big enough, and split it if there's
+ * a lot of leftover space. Out-of-memory returns NULL — the allocator
+ * never silently corrupts memory.
  */
 
 #include "kernel/heap.h"
@@ -38,7 +28,7 @@
 
 #define HEAP_PAGE_SIZE PMM_PAGE_SIZE
 
-/* Canonical high-half region: above the kernel image and the HHDM identity map. */
+/* The heap lives in the high half, above the kernel and the HHDM map. */
 #define HEAP_VIRT_BASE  0xffffffffc0000000ULL
 #define HEAP_INIT_SIZE  0x10000ULL         /* 64 KiB mapped at init          */
 
@@ -73,7 +63,7 @@ static uint64_t align_up_page(uint64_t v) {
 static uint64_t blk_size(uint64_t sf)    { return sf & ~1ULL; }
 static bool     blk_is_used(uint64_t sf) { return (sf & 1ULL) != 0ULL; }
 
-/* Free-list links live in the payload of a free block. */
+/* Free blocks store their list links inside their own payload. */
 static heap_block **fl_prev(heap_block *b) {
     return (heap_block **)((uint8_t *)b + HEAP_HEADER_SIZE);
 }
@@ -130,7 +120,7 @@ static heap_block *heap_top(void) {
     uint64_t last_size = blk_size(*(uint64_t *)(end - HEAP_FOOTER_SIZE));
     return (heap_block *)(end - last_size);
 }
-/* Grow the mapped region by at least need_size bytes. Appends free blocks. */
+/* Map more physical pages and add them to the heap as free space. */
 static bool heap_grow(uint64_t need_size) {
     uint64_t extra = align_up_page(need_size);
     if (heap_mapped_bytes + extra > HEAP_ARENA_SIZE) {
@@ -157,7 +147,8 @@ static bool heap_grow(uint64_t need_size) {
         return false;
     }
 
-    /* Append the new pages. If the previous top block is free, extend it. */
+    /* Add the new pages to the heap. If the last block is free, just
+     * grow it; otherwise create a fresh free block. */
     size_t add = (size_t)(new_end - old_end);
     heap_block *t = heap_top();
     if (t != NULL && !blk_is_used(t->size)) {
@@ -174,7 +165,7 @@ static bool heap_grow(uint64_t need_size) {
     return true;
 }
 
-/* First-fit search of the free list; splits large blocks. */
+/* Find the first free block big enough, splitting it if there's room. */
 static void *heap_alloc_from_free(uint64_t total) {
     for (heap_block *b = heap_free_head; b != NULL; b = *fl_next(b)) {
         uint64_t bsz = blk_size(b->size);
@@ -202,7 +193,7 @@ static void *heap_alloc_from_free(uint64_t total) {
     return NULL;
 }
 
-/* The fully padded total block size for a requested payload size. */
+/* Work out the full block size (header + payload + footer, aligned). */
 static size_t block_total_for(size_t size) {
     size_t need = (size_t)align_up16(size) + HEAP_HEADER_SIZE + HEAP_FOOTER_SIZE;
     if (need < HEAP_MIN_BLOCK) {
@@ -338,7 +329,7 @@ static size_t heap_capacity(const void *ptr) {
     return (size_t)(blk_size(b->size) - HEAP_HEADER_SIZE - HEAP_FOOTER_SIZE);
 }
 
-/* Walk every block and verify heap invariants. Panics on any corruption. */
+/* Walk every block and check the heap is still consistent. */
 static void heap_validate(const char *where) {
     (void)where;
     uint64_t end = HEAP_VIRT_BASE + heap_mapped_bytes;
@@ -419,7 +410,7 @@ void heap_init(void) {
 bool heap_is_initialized(void) {
     return heap_initialized;
 }
-/* Writes a deterministic, verifiable pattern into an allocation. */
+/* Fill an allocation with a known pattern so we can detect corruption. */
 static void heap_fill_pattern(void *ptr, size_t bytes, uint8_t base) {
     uint8_t *p = (uint8_t *)ptr;
     for (size_t i = 0; i < bytes; ++i) {

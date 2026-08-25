@@ -31,7 +31,7 @@ bool vm_unmap_page(uint64_t virtual_address);
 bool vm_get_physical(uint64_t virtual_address, uint64_t *physical_address);
 bool vm_is_mapped(uint64_t virtual_address);
 
-/* Convert a physical address to its higher-half identity virtual mapping. */
+/* Map a physical address up into the higher-half so we can touch it. */
 uint64_t vm_phys_to_virt(uint64_t physical_address);
 
 uint64_t vm_get_mapped_pages(void);

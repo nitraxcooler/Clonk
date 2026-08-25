@@ -8,14 +8,12 @@
 /*
  * MyOS kernel heap.
  *
- * A small boundary-tag (header/footer) free-list allocator built on top of
- * the existing Physical Memory Manager (PMM) and the Virtual Memory Manager
- * (VMM). The heap carves a reserved region of high-half virtual address
- * space and grows it one physical page at a time (scattered physical pages
- * are fine: VMM maps an arbitrary physical page to a chosen virtual page).
+ * A simple boundary-tag allocator built on top of the PMM and VMM. The
+ * heap reserves a region of high-half virtual memory and grows it one
+ * page at a time as needed.
  *
- * Allocations are 16-byte aligned. The total block size is a multiple of 16
- * so that every block starts and ends on a 16-byte boundary.
+ * Allocations are 16-byte aligned and every block starts/ends on a
+ * 16-byte boundary.
  */
 
 #define HEAP_ALIGN         16UL

@@ -6,16 +6,15 @@
 
 #include "boot/limine.h"
 
-/* CPU register snapshot captured by the ISR before it dispatched to the
- * exception handlers (saved with the exceptions further below).
- * All values are the machine registers *at the moment of the fault*. */
+/* A snapshot of the CPU registers taken by the interrupt stub right when
+ * the fault happened. These are the actual machine registers at fault time. */
 typedef struct {
     uint64_t rax, rbx, rcx, rdx, rsi, rdi, rbp;
     uint64_t r8, r9, r10, r11, r12, r13, r14, r15;
     uint64_t rip, cs, rflags;
 } cpu_reg_frame;
 
-/* Decoded x86-64 page-fault error-code bits (CR2 / cpu frame error code). */
+/* The individual bits of a page-fault error code, decoded into booleans. */
 typedef struct {
     bool present;     /* bit0: 1 = present (protection violation), 0 = not present */
     bool write;       /* bit1: 1 = write access, 0 = read */
@@ -27,7 +26,7 @@ typedef struct {
 extern volatile uint64_t limine_base_revision[3];
 extern volatile struct limine_framebuffer_request framebuffer_request;
 
-/* Decode the page-fault error code into human-intelligible bits. */
+/* Turn a raw page-fault error code into readable yes/no flags. */
 void decode_page_error(uint64_t error, pf_decode *out);
 
 void kernel_panic(const char *reason);

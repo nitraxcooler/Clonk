@@ -7,16 +7,15 @@
 #include "kernel/blockdev.h"
 
 /*
- * MyOS Virtual Filesystem — a thin abstraction between the kernel/shell and
- * concrete filesystem implementations (FAT32, MyBread, ...).
+ * MyOS Virtual Filesystem — a thin layer between the kernel and the
+ * concrete filesystems (FAT32, later MyBread).
  *
- * A filesystem registers a vfs_fs_ops vtable for a mounted block device.
- * Higher layers (shell commands) only ever talk to the VFS API below; they
- * never reach into FAT32 or block-device internals.  The VFS itself has no
- * knowledge of any specific filesystem.
+ * A filesystem provides a vtable of operations for a mounted device.
+ * Shell commands only ever use the VFS API below; they never touch
+ * FAT32 or block-device internals directly.
  *
- * Paths are absolute ("/hello.txt").  The mount point is matched as a
- * prefix; the longest match wins.
+ * Paths are absolute ("/hello.txt"). Each mount point is matched as a
+ * prefix and the longest match wins.
  */
 
 #define VFS_MAX_MOUNTS     8

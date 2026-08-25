@@ -4,17 +4,16 @@
 #include <stdint.h>
 
 /*
- * MyOS CLI command dispatcher.
+ * MyOS command dispatcher.
  *
- * The keyboard driver collects a line of input and hands it to
- * shell_handle_command(). This keeps the shell separate from kernel
- * internals: commands call kernel APIs (PMM/VMM/heap/...) rather than
- * poking at their private data.
+ * The keyboard driver feeds whole lines in here, one at a time. The
+ * shell stays out of the kernel's internals every command just calls
+ * a kernel API instead of poking around in its private business.
  */
 
 void shell_handle_command(const char *cmdline);
 
-/* Low-level text helpers shared by commands (screen + serial). */
+/* Text helpers the commands use to talk to the screen and serial. */
 void shell_print(const char *s);
 void shell_print_u64(uint64_t value);
 void shell_print_hex(uint64_t value);

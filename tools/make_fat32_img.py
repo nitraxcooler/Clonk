@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a FAT32 disk image for MyOS testing (1.44 MB)."""
+"""Build a little FAT32 disk image (1.44 MB) so MyOS has something to mount at boot."""
 import struct
 
 SECTOR = 512
@@ -16,7 +16,7 @@ def cl_sector(cl):
     return DATA_START + (cl - ROOT_CL) * SPC
 
 def dir_entry(name8, ext3, attr, size, first_cl):
-    """32-byte FAT32 short entry via explicit bytearray."""
+    """Build one 32-byte FAT32 short entry by hand."""
     e = bytearray(32)
     nb = (name8.encode('ascii').upper() + b' ' * 8)[:8]
     xb = (ext3.encode('ascii').upper() + b' ' * 3)[:3]
@@ -33,7 +33,8 @@ def dir_entry(name8, ext3, attr, size, first_cl):
 def make():
     img = bytearray(NSECTORS * SECTOR)
 
-    # FAT
+    # The FAT: reserve the first few entries (0/1 are special, and a few
+    # clusters are pre-marked used so the disk has some content to show).
     fat = bytearray(FAT_SECTORS * SECTOR)
     for idx, val in [(0, 0x0FFFFFF8), (1, 0x0FFFFFFF),
                      (2, 0x0FFFFFFF), (3, 0x0FFFFFFF),
@@ -43,12 +44,12 @@ def make():
         off = (RESERVED + i * FAT_SECTORS) * SECTOR
         img[off:off + len(fat)] = fat
 
-    # File data
+    # The files that ship on the disk.
     hello   = b"Hello, MyOS FAT32 world!\n"
     welcome = b"Welcome to MyOS. FAT32 is working.\n"
     test    = bytes(range(16))
 
-    # Root directory
+    # Root directory entries pointing at the files above.
     root_off = cl_sector(ROOT_CL) * SECTOR
     entries = bytearray()
     entries += dir_entry('.', '',      0x10, 0, ROOT_CL)
@@ -63,7 +64,7 @@ def make():
     img[cl_sector(5)*SECTOR:cl_sector(5)*SECTOR+len(welcome)] = welcome
     img[cl_sector(4)*SECTOR:cl_sector(4)*SECTOR+len(test)]    = test
 
-    # Boot sector
+    # Boot sector with the FF32 boot signature and a few sane values.
     b = bytearray(SECTOR)
     b[0:3] = b'\xEB\x58\x90'
     b[3:11] = b'MYOSFAT3'

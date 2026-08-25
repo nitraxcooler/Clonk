@@ -1,11 +1,10 @@
-# Host-aware toolchain selection.
-# On Windows the MSYS/clang64 toolchain reliably produces x86_64-elf objects.
-# On Linux/WSL (and other Unix-like hosts) the system compiler/linker is used;
-# both produce x86-64 ELF freestanding objects for this target.
+# Pick the right toolchain for the host.
+# MSYS2/clang64 on Windows gives us clean x86_64-elf objects; on Linux/WSL
+# the system cc/ld works fine (both target the same bare-metal ELF format).
 TARGET_TRIPLE = x86_64-elf
 
-# Note: plain "=" (not "?=") is required here because GNU make has a built-in
-# default of CC=cc / LD=ld, which would defeat "?=" and break the Windows path.
+# Careful: use "=" here, not "?=". GNU make already defaults CC=cc and LD=ld,
+# so "?=" would be a no-op and the Windows path would silently break.
 ifeq ($(OS),Windows_NT)
 CC = C:/msys64/clang64/bin/clang
 LD = C:/msys64/clang64/bin/ld.lld
@@ -35,15 +34,15 @@ endif
 QEMU_SERIAL ?= stdio
 QEMU_MONITOR ?= none
 
-# Base CFLAGS shared across all compilers
-# -mno-mmx/-mno-sse/-mno-80387: the kernel does not enable SSE in CR0/CR4,
-# so the compiler must not emit SIMD instructions (e.g. for struct copies);
-# otherwise they raise #UD ("Invalid Opcode") at runtime.
+# Base CFLAGS shared by every compiler.
+# The -mno-mmx/-mno-sse/-mno-80387 flags matter a lot: we never turn on
+# SSE in CR0/CR4, so if the compiler emits any SIMD instructions (say, for
+# a struct copy) the CPU will throw #UD and crash the kernel at runtime.
 CFLAGS = -Wall -Wextra -std=gnu11 -ffreestanding -fno-stack-protector \
          -fno-pie -fno-PIC -m64 -march=x86-64 -mno-red-zone -mcmodel=large \
          -mno-mmx -mno-sse -mno-sse2 -mno-80387 -msoft-float -I src
 
-# Append --target only when using Clang
+# Clang needs --target so it knows it's building bare-metal ELF for x86-64.
 ifneq ($(findstring clang,$(CC)),)
 CFLAGS += --target=$(TARGET_TRIPLE)
 endif

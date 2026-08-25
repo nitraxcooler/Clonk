@@ -8,7 +8,8 @@
 #include "kernel/pmm.h"
 #include "kernel/vmm.h"
 
-/* Minimal serial debug helpers (COM1 0x3F8) used only for headless debugging */
+/* These helpers write to the serial port (COM1) so we can see what's
+ * happening even when there's no screen attached. */
 static inline void serial_putc(char c) {
     outb(0x3F8, (uint8_t)c);
 }
@@ -83,7 +84,7 @@ void kprint(const char *str, uint32_t fg_color) {
     }
 }
 
-void kbackspace(void) {2
+void kbackspace(void) {
     if (cursor_x >= 18) {
         cursor_x -= 8;
         draw_char(' ', cursor_x, cursor_y, 0x000000, 0x000000);
@@ -106,7 +107,7 @@ static void halt(void) {
 }
 
 void _start(void) {
-    /* early serial heartbeat for headless debugging */
+    /* Let the serial log know we made it into the kernel. */
     serial_write("BOOT: _start\n");
 
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) halt();
@@ -114,12 +115,12 @@ void _start(void) {
 
     fb = framebuffer_request.response->framebuffers[0];
 
-    /* report framebuffer address to serial for diagnostics */
+    /* Tell the serial log that the framebuffer is ready to use. */
     serial_write("BOOT: framebuffer OK\n");
 
     kclear();
 
-    kprint("MyOS CLI Interactive Shell v0.1.0\n", 0x00FF00);
+    kprint("MyOS CLI Interactive Shell v0.1.1\n", 0x00FF00);
     kprint("Type 'help' for available commands.\n\n", 0xFFFFFF);
 
     serial_write("BOOT: initializing IDT\n");

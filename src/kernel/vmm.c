@@ -9,7 +9,7 @@
 #include "kernel/pmm.h"
 #include "arch/x86_64/io.h"
 
-/* Serial helpers for VMM debugging (COM1) */
+/* Serial helpers so VMM progress is visible in the boot log. */
 static inline void vmm_serial_putc(char c) { outb(0x3F8, (uint8_t)c); }
 static void vmm_serial_write(const char *s) { while (*s) vmm_serial_putc(*s++); }
 static void vmm_serial_hex64(uint64_t v) {
@@ -47,7 +47,7 @@ static void vmm_zero_memory(uint8_t *ptr, size_t length) {
     }
 }
 
-/* x86-64: bits 63:48 must equal bit 47 (sign extension of bit 47). */
+/* On x86-64, a canonical address has bits 63:48 matching bit 47. */
 static bool vmm_is_canonical(uint64_t address) {
     uint64_t upper = address & 0xFFFF000000000000ULL;
     uint64_t sign  = address & 0x0000800000000000ULL;
@@ -65,16 +65,15 @@ static bool vmm_is_page_aligned(uint64_t address) {
     return (address & (VMM_PAGE_SIZE - 1U)) == 0U;
 }
 
-/* Return a pointer to an existing next-level table, or allocate a new one
- * through the PMM. Returns NULL when the entry is an existing huge-page
- * mapping, because a smaller page cannot be created inside it without
- * splitting it. */
+/* Get the next-level page table for an entry, allocating a fresh one
+ * from the PMM if it doesn't exist yet. Returns NULL if the entry is a
+ * huge page, since you can't descend into a huge page. */
 static uint64_t *vmm_get_or_create_table(uint64_t *parent_table, uint64_t index) {
     uint64_t entry = parent_table[index];
 
     if ((entry & VMM_PAGE_PRESENT) != 0U) {
         if ((entry & VMM_PAGE_LARGE) != 0U) {
-            return NULL; /* huge page: cannot descend */
+            return NULL; /* it's a huge page — nothing to descend into */
         }
         return (uint64_t *)vmm_phys_to_virt(entry & ~0xFFFULL);
     }
@@ -94,8 +93,8 @@ static uint64_t *vmm_get_or_create_table(uint64_t *parent_table, uint64_t index)
     return table;
 }
 
-/* Walk the active PML4 and count 4 KiB mapped pages and page-table pages
- * truthfully, including huge pages established by the bootloader. */
+/* Walk the whole page-table tree and count mapped pages and page-table
+ * pages, including huge pages set up by the bootloader. */
 static void vmm_recount(void) {
     vmm_mapped_pages = 0;
     vmm_page_table_count = 0;
@@ -105,7 +104,7 @@ static void vmm_recount(void) {
     }
 
     uint64_t *pml4 = (uint64_t *)vmm_phys_to_virt(vmm_active_pml4);
-    ++vmm_page_table_count; /* the PML4 itself */
+    ++vmm_page_table_count; /* don't forget the PML4 itself */
 
     for (uint64_t i = 0; i < PAGE_TABLE_ENTRIES; ++i) {
         uint64_t pml4_entry = pml4[i];
@@ -123,7 +122,7 @@ static void vmm_recount(void) {
             }
 
             if ((pdpt_entry & VMM_PAGE_LARGE) != 0U) {
-                /* 1 GiB page == 262144 x 4 KiB pages */
+                /* A 1 GiB page counts as 262144 normal pages. */
                 vmm_mapped_pages += 512U * 512U;
                 continue;
             }
@@ -138,7 +137,7 @@ static void vmm_recount(void) {
                 }
 
                 if ((pd_entry & VMM_PAGE_LARGE) != 0U) {
-                    /* 2 MiB page == 512 x 4 KiB pages */
+                    /* A 2 MiB page counts as 512 normal pages. */
                     vmm_mapped_pages += 512U;
                     continue;
                 }
@@ -176,7 +175,8 @@ void vm_switch_address_space(uint64_t pml4_physical_address) {
     }
 
     vmm_active_pml4 = pml4_physical_address;
-    /* A CR3 load flushes all non-global TLB entries on x86-64. */
+    /* Writing CR3 switches the address space and clears the TLB,
+     * so the new tables are in effect right away. */
     __asm__ volatile ("mov %0, %%cr3" : : "r"(pml4_physical_address) : "memory");
     __asm__ volatile ("mov %%cr3, %%rax\n\tmov %%rax, %%cr3" : : : "rax");
 }
@@ -225,7 +225,7 @@ bool vm_map_page(uint64_t virtual_address, uint64_t physical_address, uint64_t f
         return false;
     }
 
-    /* Refuse to silently replace an existing mapping. */
+    /* Don't silently overwrite a mapping that's already there. */
     if ((pt[pt_index] & VMM_PAGE_PRESENT) != 0U) {
         return false;
     }
@@ -258,7 +258,7 @@ bool vm_unmap_page(uint64_t virtual_address) {
     if ((pdpt[pdpt_index] & VMM_PAGE_PRESENT) == 0U) {
         return false;
     }
-    /* Huge pages are not supported by unmap in this milestone. */
+    /* Unmapping huge pages isn't supported yet. */
     if ((pdpt[pdpt_index] & VMM_PAGE_LARGE) != 0U) {
         return false;
     }
@@ -388,12 +388,10 @@ void vm_init(void) {
     vmm_hhdm_offset = limine_hhdm_request.response->offset;
     vmm_serial_write("VMM: hhdm offset: "); vmm_serial_hex64(vmm_hhdm_offset);
 
-    /* The kernel is already running with Limine's page tables. We allocate our
-     * own PML4 from the PMM and seed it with the bootloader's top-level
-     * entries. This preserves every mapping the running kernel needs
-     * (kernel code/data, HHDM, identity low memory, stack, IDT, framebuffer,
-     * Limine request structures) while moving ownership of the page-table
-     * root into MyOS. After the switch, CR3 points at our PML4. */
+    /* The kernel is already running on Limine's page tables. We build our
+     * own PML4 and copy the bootloader's top-level entries into it, so
+     * every mapping the kernel needs (code, HHDM, stack, IDT, framebuffer)
+     * survives the switch. After this, CR3 points at our page tables. */
     vmm_active_pml4 = vm_create_address_space();
     vmm_serial_write("VMM: our pml4 phys: "); vmm_serial_hex64(vmm_active_pml4);
 
@@ -411,9 +409,8 @@ void vm_init(void) {
         new_pml4[i] = boot_pml4[i];
     }
 
-    /* The bootloader may use 2 MiB / 1 GiB pages for the identity and HHDM
-     * mappings. Recount walks the seeded tables (including huge pages) so
-     * the reported statistics are real, not accumulated from map calls. */
+    /* The bootloader may use huge pages, so recount walks the real tables
+     * to get accurate statistics instead of guessing. */
     vmm_recount();
     vmm_serial_write("VMM: mapped pages: "); vmm_serial_hex64(vmm_mapped_pages);
     vmm_serial_write("VMM: table count:  "); vmm_serial_hex64(vmm_page_table_count);
@@ -460,8 +457,8 @@ void vm_self_test(void) {
         kernel_panic("PAGING_SELF_TEST_UNALIGNED");
     }
 
-    /* Deterministic test virtual address: high canonical, below the kernel
-     * (kernel is at 0xffffffff80000000), and never mapped by Limine or MyOS. */
+    /* Pick a fixed test address that's canonical, below the kernel image,
+     * and guaranteed not to be mapped by Limine or MyOS. */
     uint64_t virtual_address = 0xffffff8000000000ULL;
     if (vm_is_mapped(virtual_address)) {
         kernel_panic("PAGING_SELF_TEST_VA_IN_USE");
@@ -495,9 +492,8 @@ void vm_self_test(void) {
         kernel_panic("PAGING_SELF_TEST_DOUBLE_MAP_ALLOWED");
     }
 
-    /* Capture PMM state after mapping so page-table allocation is accounted.
-     * Unmapping does not free page-table pages (they are kernel-owned), but
-     * the physical page we mapped must still be balanced when released. */
+    /* Remember PMM state before unmapping. Page-table pages stay allocated
+     * (the VMM owns them), but the data page must come back when freed. */
     uint64_t free_before_unmap = pmm_get_free_pages();
     uint64_t used_before_unmap = pmm_get_used_pages();
 
@@ -520,9 +516,8 @@ void vm_self_test(void) {
 
     pmm_free_page(physical_page);
 
-    /* The physical page lifecycle must be balanced: the page we mapped must
-     * be available again after vm_unmap_page + pmm_free_page. Span discarded
-     * page-table pages stay allocated on purpose (they are owned by the VMM). */
+    /* After unmapping and freeing, the data page must be available again.
+     * The page-table pages stay allocated on purpose. */
     if (pmm_get_free_pages() != (free_before_unmap + 1U) ||
         pmm_get_used_pages() != (used_before_unmap - 1U)) {
         kernel_panic("PAGING_SELF_TEST_PMM_DRIFT");

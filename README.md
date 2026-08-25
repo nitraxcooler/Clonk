@@ -2,15 +2,13 @@
 
 > A hobby operating system built from scratch in C for x86-64, booting with Limine.
 
-
-
 MyOS is a personal operating system project focused on learning how operating systems work from the hardware up. Instead of building on Linux or another existing kernel, MyOS is developed as its own kernel with custom drivers, memory management, and graphics.
 
 The long-term goal is to grow MyOS from a command-line kernel into a complete operating system with its own filesystem (**MyBread**), graphical desktop (**MyGUI**), and userspace.
 
 ---
 
-## Current Features
+## Current Features (v0.1.1)
 
 * x86-64 kernel
 * Limine bootloader support
@@ -19,12 +17,13 @@ The long-term goal is to grow MyOS from a command-line kernel into a complete op
 * CPU exception handling
 * Full-screen Kernel Panic diagnostics
 * Physical Memory Manager (PMM)
-<<<<<<< HEAD
-* Virtual Memory / Paging (4-level paging, PMM-allocated page tables)
-* Page fault diagnostics (CR2 capture + error-code decoding)
-=======
-* Virtual Memory Manager (VMM)
->>>>>>> 05175210acff34ca13ae975de5350d2558de3b68
+* Virtual Memory Manager (VMM) — 4-level paging with PMM-allocated page tables
+* Page fault diagnostics (CR2 capture + error-code decoding + register dump)
+* Kernel heap (`kmalloc` / `kfree` / `kcalloc` / `krealloc`)
+* Block device abstraction
+* RAM disk driver
+* Virtual Filesystem (VFS)
+* FAT32 read/write support
 * Keyboard driver
 * Custom bitmap font renderer
 * Command Line Interface (CLI)
@@ -32,19 +31,26 @@ The long-term goal is to grow MyOS from a command-line kernel into a complete op
 
 ### Built-in Commands
 
-| Command   | Description                        |
-| --------- | ---------------------------------- |
-| `help`    | Show available commands            |
-| `echo`    | Print text                         |
-| `version` | Show MyOS version                  |
-| `clear`   | Clear the screen                   |
-| `panic`   | Trigger a test Kernel Panic        |
-| `mem`     | Display physical memory statistics |
-| `vmem`    | Display virtual memory statistics  |
-<<<<<<< HEAD
-| `pfault`  | Trigger a controlled page fault    |
-=======
->>>>>>> 05175210acff34ca13ae975de5350d2558de3b68
+| Command    | Description                        |
+| ---------- | ---------------------------------- |
+| `help`     | Show available commands            |
+| `clear`    | Clear the screen                   |
+| `version`  | Show MyOS version                  |
+| `echo`     | Print text                         |
+| `mem`      | Display physical memory statistics |
+| `vmem`     | Display virtual memory statistics  |
+| `heap`     | Display kernel heap statistics     |
+| `selftest` | Re-run all kernel self-tests       |
+| `panic`    | Trigger a test Kernel Panic        |
+| `pfault`   | Trigger a controlled page fault    |
+| `badalloc` | Trigger out-of-memory (heap exhaustion) |
+| `blkinfo`  | List block devices                 |
+| `ls`       | List directory contents            |
+| `cat`      | Print a file                       |
+| `touch`    | Create an empty file               |
+| `write`    | Write text to a file               |
+| `rm`       | Delete a file                      |
+| `mkdir`    | Create a directory                 |
 
 ---
 
@@ -59,15 +65,18 @@ The long-term goal is to grow MyOS from a command-line kernel into a complete op
 ```text
 MyOS/
 ├── src/
-│   ├── arch/          # Architecture-specific code
+│   ├── arch/          # Architecture-specific code (x86_64)
 │   ├── boot/          # Boot protocol headers
-│   ├── drivers/       # Hardware drivers
+│   ├── drivers/       # Hardware drivers (keyboard, storage)
+│   ├── fs/            # Filesystems (VFS, FAT32)
 │   ├── graphics/      # Rendering and fonts
-│   ├── kernel/        # Core kernel
-│   └── lib/           # Utility functions
+│   ├── kernel/        # Core kernel (PMM, VMM, heap, panic)
+│   ├── lib/           # Utility functions (string, memory)
+│   └── shell/         # Command-line interface
 │
-├── iso_root/          # ISO contents
+├── iso_root/          # Limine configuration (and other boot stuff)
 ├── third_party/       # External dependencies (Limine)
+├── tools/             # Development tools (FAT32 image generator)
 ├── build/             # Generated build artifacts
 │
 ├── GNUmakefile
@@ -81,15 +90,10 @@ MyOS/
 
 ### Requirements
 
-<<<<<<< HEAD
 * Linux / WSL (recommended) or Windows with MSYS2
 * A C compiler and linker that can produce x86-64 ELF freestanding objects:
   * Linux/WSL: `gcc` + GNU `ld` (or `clang` + `ld.lld`)
   * Windows: the MSYS2/clang64 toolchain (`clang` + `ld.lld`)
-=======
-* Any form of Linux or WSL (recommended)
-* GCC
->>>>>>> 05175210acff34ca13ae975de5350d2558de3b68
 * GNU Make
 * QEMU
 * xorriso
@@ -142,7 +146,11 @@ Virtual Memory
  ↓
 Kernel Heap
  ↓
-Storage
+Block Storage
+ ↓
+VFS
+ ↓
+FAT32
  ↓
 Userspace
  ↓
@@ -166,25 +174,24 @@ This keeps the project easier to debug and helps ensure new features don't break
 * [x] Physical Memory Manager
 * [x] Virtual Memory / Paging
 * [x] Page fault diagnostics
+* [x] Kernel heap (`kmalloc` / `kfree`)
+* [x] Block device abstraction
+* [x] RAM disk driver
+* [x] VFS
+* [x] FAT32 read/write
 * [x] CLI
 * [x] Keyboard input
 * [x] Custom font rendering
-* [x] Virtual Memory / Paging
-### In Progress
-<<<<<<< HEAD
 
-=======
-* [ ] Page fault diagnostics
->>>>>>> 05175210acff34ca13ae975de5350d2558de3b68
-* [ ] Kernel heap (`kmalloc` / `kfree`)
+### In Progress
+
+* [ ] MyBread filesystem
 
 ### Planned
 
 * [ ] Task scheduling
 * [ ] Process management
-* [ ] VFS
-* [ ] MyBread filesystem
-* [ ] Storage drivers
+* [ ] Storage drivers (ATA/SATA/NVMe)
 * [ ] Networking
 * [ ] Audio
 * [ ] Framebuffer improvements
@@ -244,7 +251,7 @@ If you're contributing code:
 
 ## License
 
-A project license will be added as the project matures.
+MIT License — see `LICENSE` for details.
 
 ---
 

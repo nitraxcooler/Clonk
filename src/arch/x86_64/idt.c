@@ -126,14 +126,15 @@ void exception_handler_err(uint64_t *stack, uint64_t vector) {
         name = exception_names[vector];
     }
 
-        if (vector == 14) {
+    /* Vector 14 is the page fault. The ISR saved all our registers,
+     * so let's snapshot them and read CR2, then hand everything to the
+     * panic screen — it can tell you exactly what went wrong. */
+    if (vector == 14) {
         __asm__ volatile ("mov %%cr2, %0" : "=r"(fault_address));
 
-        /* Build a register snapshot from the ISR-saved GPR block.
-         * The ISR stub pushes 15 GPRs (stack[0..14]), then the CPU pushes
-         * the error code (stack[15]) followed by RIP, CS, RFLAGS.
-         * The cpu_reg_frame struct has 15 GPRs + rip + cs + rflags,
-         * so we copy from the stack, skipping the error-code gap. */
+        /* The stub pushed the 15 GPRs (stack[0..14]). After those come the
+         * error code (stack[15]) then RIP/CS/RFLAGS. We re-assemble all of
+         * it into a cpu_reg_frame so the panic handler has the full story. */
         cpu_reg_frame frame;
         frame.rax    = stack[0];
         frame.rbx    = stack[1];

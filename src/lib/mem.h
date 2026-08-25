@@ -4,15 +4,12 @@
 #include <stddef.h>
 
 /*
- * Minimal freestanding memory helpers.
+ * Tiny memory helpers for when there's no libc around.
  *
- * MyOS runs without a C runtime library, but the x86-64 ABI and compiler
- * codegen may emit calls to memcpy/memset for bulk copies and zeroing.
- * These provide those symbols so the kernel stays fully self-contained.
- *
- * They are intentionally simple (byte loops). The 'volatile' accessors stop
- * the compiler from recognising the loop as a call to the very function being
- * defined, which would otherwise recurse.
+ * The compiler will quietly emit calls to memcpy/memset for things like
+ * struct copies, so we have to provide them ourselves. They're just
+ * plain byte loops — good enough, and the `volatile` keeps the compiler
+ * from turning our loop back into a call to itself (yes, that's a thing).
  */
 
 void *memcpy(void *dest, const void *src, size_t n);

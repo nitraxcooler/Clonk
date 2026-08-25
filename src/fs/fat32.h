@@ -21,7 +21,8 @@ typedef struct fat32_fs {
     uint32_t  next_cluster;         /* next allocation hint (write path)   */
 } fat32_fs;
 
-/* Check and parse the BPB; fill *fs.  Returns 0 on success. */
+/* Read the boot sector, check it's really FAT32, and fill in `fs`.
+ * Returns 0 if it worked. */
 int fat32_mount(block_device *dev, fat32_fs *fs);
 
 extern struct vfs_fs_ops fat32_ops;

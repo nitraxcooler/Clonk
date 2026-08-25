@@ -12,7 +12,8 @@ extern volatile struct limine_framebuffer_request framebuffer_request;
 
 static struct limine_framebuffer *panic_fb = NULL;
 
-/* Minimal serial helpers for panics (COM1 0x3F8) */
+/* Serial helpers so a panic is still visible in the log even if the
+ * screen is broken. */
 static inline void panic_serial_putc(char c) { outb(0x3F8, (uint8_t)c); }
 static void panic_serial_write(const char *s) { while (*s) panic_serial_putc(*s++); }
 static void panic_serial_hex64(uint64_t v) {
@@ -169,7 +170,7 @@ static void panic_render_page_fault(uint64_t fault_address, uint64_t error_code,
     panic_draw_string("Error Code: ", 32, 254, 0xFFD5D5, 0x000000);
     panic_draw_hex64(error_code, 32 + 13 * 8, 254, 0xFFFFFF);
 
-    /* Decoded page-fault error bits (x86-64 CR2 / error-code semantics). */
+    /* Show what each bit of the page-fault error code means. */
     panic_draw_string("Present: ", 32, 282, 0xFFD5D5, 0x000000);
     panic_draw_string(d.present ? "Yes" : "No", 32 + 9 * 8, 282, 0xFFFFFF, 0x000000);
     panic_draw_string("Write: ", 32 + 20 * 8, 282, 0xFFD5D5, 0x000000);
@@ -182,7 +183,7 @@ static void panic_render_page_fault(uint64_t fault_address, uint64_t error_code,
     panic_draw_string("Instruction: ", 32 + 24 * 8, 300, 0xFFD5D5, 0x000000);
     panic_draw_string(d.instruction ? "Yes" : "No", 32 + 37 * 8, 300, 0xFFFFFF, 0x000000);
 
-    /* Explain what the decoded state means. */
+    /* Turn the decoded bits into a plain-language description. */
     if (d.reserved) {
         panic_draw_string("Type: reserved-bit violation", 32, 318, 0xFFEEEE, 0x000000);
     } else if (!d.present) {
@@ -191,12 +192,10 @@ static void panic_render_page_fault(uint64_t fault_address, uint64_t error_code,
         panic_draw_string("Type: protection violation (page present)", 32, 318, 0xFFEEEE, 0x000000);
     }
 
-    /* Full register snapshot captured by the ISR. */
+    /* The ISR saved every general-purpose register; show them all. */
     panic_draw_string("CPU register snapshot at fault:", 32, 352, 0xFFDDDD, 0x000000);
 
-            /* Left column and right column for the 15 general-purpose registers.
-     * Left label+value spans up to col+184; keep the right column far
-     * enough to avoid text overlap. */
+    /* Registers are laid out in two columns so they fit on screen. */
     const uint32_t lx = 32;
     const uint32_t rx = 32 + 36 * 8;   /* right-hand column */
 
@@ -222,7 +221,7 @@ static void panic_render_page_fault(uint64_t fault_address, uint64_t error_code,
 void kernel_panic_exception(const char *reason, uint8_t vector, const char *name,
                            uint64_t error_code, uint64_t rip, uint64_t cs,
                            uint64_t rflags, uint64_t rsp, uint64_t ss) {
-    /* Emit minimal serial diagnostics first so headless boots capture the panic */
+    /* Log the panic to serial first, in case the screen is unusable. */
     panic_serial_write("PANIC: ");
     panic_serial_write(reason);
     panic_serial_write("\nVector: ");
@@ -263,7 +262,7 @@ void kernel_panic_page_fault(const char *reason, uint8_t vector, const char *nam
                             uint64_t rip, uint64_t cs, uint64_t rflags,
                             uint64_t rsp, uint64_t ss,
                             const cpu_reg_frame *regs) {
-    /* Emit serial diagnostics early */
+    /* Log the page fault to serial before touching the screen. */
     panic_serial_write("PANIC: ");
     panic_serial_write(reason);
     panic_serial_write("\nFault addr: ");

@@ -1,11 +1,11 @@
 /*
  * MyOS FAT32 driver (read-write).
  *
- * Validates a FAT32 boot sector/BPB, follows cluster chains through the
- * FAT, lists/looks up 8.3 directory entries, reads/writes file content,
- * creates files/directories and deletes files.  Exposed to the VFS
- * through the `fat32_ops` vtable so the shell can mount, ls, cat, write,
- * touch, rm and mkdir without knowing about FAT32 internals.
+ * Validates a FAT32 boot sector, follows cluster chains through the FAT,
+ * lists and looks up 8.3 directory entries, reads and writes file data,
+ * and creates/deletes files and directories. It plugs into the VFS via
+ * the `fat32_ops` vtable so the shell can use it without knowing any
+ * FAT32 internals.
  */
 
 #include "fs/fat32.h"
@@ -20,7 +20,7 @@
 #define F32_EOC   0x0FFFFFF8UL /* end-of-clusterchain marker (and above) */
 #define ATTR_DIR  0x10
 
-/* Per-open handle stashed in vfs_file::fs_handle. */
+/* What we remember about an open file so we can find it again later. */
 typedef struct {
     uint32_t first_cluster;
     uint32_t parent_cluster;  /* cluster of directory holding our entry  */
@@ -28,7 +28,8 @@ typedef struct {
     uint32_t size;            /* cached size (files only)                 */
 } fat32_fhandle;
 
-/* ---------- entry field helpers ---------- */
+/* These just shuffle bytes around inside a 32-byte directory entry.
+ * FAT likes to scatter the cluster number across two spots, so here we are. */
 
 static uint32_t f32_entry_cluster(const uint8_t *e) {
     uint32_t lo = e[0x1A] | ((uint32_t)e[0x1B] << 8);
@@ -55,9 +56,9 @@ static void f32_set_entry_size(uint8_t *e, uint32_t sz) {
     e[0x1F] = (uint8_t)((sz >> 24) & 0xFF);
 }
 
-/* ---------- name helpers ---------- */
+/* Dealing with the 8.3 naming scheme. */
 
-/* Build the printable short name ("NAME.EXT", "DIR", "." etc.). */
+/* Make a human-friendly name out of the space-padded on-disk one. */
 static void f32_format_name(const uint8_t *e, char *out, size_t cap) {
     size_t n = 0;
     int base_len = 0;
@@ -80,7 +81,8 @@ static void f32_format_name(const uint8_t *e, char *out, size_t cap) {
     out[n] = '\0';
 }
 
-/* Upper-case in place (for case-insensitive 8.3 comparison). */
+/* Uppercase a string. FAT treats names case-insensitively, so we compare
+ * everything in caps to keep it simple. */
 static void f32_upper(char *s) {
     while (*s) {
         if (*s >= 'a' && *s <= 'z') {
@@ -90,8 +92,8 @@ static void f32_upper(char *s) {
     }
 }
 
-/* Convert a filename string ("hello.txt") to on-disk 8.3 form:
- * 11 bytes, upper-cased, space-padded ("HELLO   TXT"). */
+/* Squash a normal name like "hello.txt" into the fixed 11-byte 8.3
+ * form FAT wants on disk: uppercase and space-padded. */
 static void f32_to_83(const char *name, uint8_t *out) {
     for (int i = 0; i < 11; i++) out[i] = ' ';
 
@@ -117,7 +119,7 @@ static void f32_to_83(const char *name, uint8_t *out) {
     }
 }
 
-/* ---------- low-level sector / FAT helpers ---------- */
+/* The low-level stuff: talking to clusters and FAT entries. */
 
 static int f32_read_cluster(fat32_fs *fs, uint32_t cluster, void *buf) {
     uint64_t first = fs->data_start_sector +
@@ -146,7 +148,7 @@ static uint32_t f32_fat_entry(fat32_fs *fs, uint32_t cluster) {
     return v & 0x0FFFFFFFUL; /* top 4 bits are reserved */
 }
 
-/* Write one FAT entry value; mirrored into every FAT copy. */
+/* Write a FAT entry. FAT keeps backup copies, so update them all. */
 static int f32_set_fat_entry(fat32_fs *fs, uint32_t cluster, uint32_t value) {
     uint8_t scratch[512];
     uint64_t fat_byte = (uint64_t)fs->reserved_sectors * fs->bytes_per_sector
@@ -171,7 +173,8 @@ static int f32_set_fat_entry(fat32_fs *fs, uint32_t cluster, uint32_t value) {
     return 0;
 }
 
-/* Allocate a free data cluster (marks it EOC).  Returns cluster or 0. */
+/* Hand out a free cluster and mark it as the end of a chain.
+ * Returns the cluster, or 0 when the disk is full. */
 static uint32_t f32_alloc_cluster(fat32_fs *fs) {
     uint32_t total_clusters =
         (fs->total_sectors - fs->data_start_sector) / fs->sectors_per_cluster;
@@ -200,7 +203,7 @@ static uint32_t f32_alloc_cluster(fat32_fs *fs) {
     return 0;                                      /* volume full */
 }
 
-/* Free a whole cluster chain starting at first_cluster. */
+/* Walk a cluster chain and mark every cluster free. */
 static int f32_free_chain(fat32_fs *fs, uint32_t first_cluster) {
     uint32_t cl = first_cluster;
     int guard = 0;
@@ -217,11 +220,10 @@ static int f32_free_chain(fat32_fs *fs, uint32_t first_cluster) {
     return 0;
 }
 
-/* ---------- directory scanning ---------- */
+/* Everything that walks through directories. */
 
-/* Callback receives the 32-byte entry, the directory cluster holding it
- * and the byte offset of the entry within the whole directory chain.
- * cb returns non-zero to stop early. */
+/* Callbacks get the raw 32-byte entry, which directory cluster it lives
+ * in, and where in that directory it is. Return non-zero to bail out. */
 typedef int (*dir_cb)(const uint8_t *entry, uint32_t dir_cluster,
                       uint32_t entry_off, void *arg);
 
@@ -264,7 +266,7 @@ static int f32_walk_dir(fat32_fs *fs, uint32_t dir_cluster, dir_cb cb,
     return 0;
 }
 
-/* Read a 32-byte raw entry at `entry_off` inside a directory chain. */
+/* Grab one raw 32-byte entry at a specific offset in a directory. */
 static int f32_read_dir_entry(fat32_fs *fs, uint32_t dir_cluster,
                               uint32_t entry_off, uint8_t *out) {
     uint8_t cbuf[4096];
@@ -282,7 +284,7 @@ static int f32_read_dir_entry(fat32_fs *fs, uint32_t dir_cluster,
     return 0;
 }
 
-/* Write a 32-byte raw entry at `entry_off` inside a directory chain. */
+/* Put one raw 32-byte entry back at a specific offset in a directory. */
 static int f32_write_dir_entry(fat32_fs *fs, uint32_t dir_cluster,
                                uint32_t entry_off, const uint8_t *entry) {
     uint8_t cbuf[4096];
@@ -300,7 +302,7 @@ static int f32_write_dir_entry(fat32_fs *fs, uint32_t dir_cluster,
     return f32_write_cluster(fs, cl, cbuf);
 }
 
-/* ---------- directory search & listing ---------- */
+/* Figuring out paths and listing directories. */
 
 typedef struct {
     char needle[13];              /* upper-cased name to find          */
@@ -346,9 +348,9 @@ static int f32_readdir_cb(const uint8_t *e, uint32_t dir_cluster,
     return 0;
 }
 
-/* Resolve an absolute path into its parent-directory cluster and final
- * filename component ("/foo/bar.txt" -> parent="/foo", name="bar.txt").
- * Intermediate components must exist and be directories. */
+/* Split a path like "/foo/bar.txt" into its directory ("/foo") and the
+ * final name ("bar.txt"). Everything before the last slash must already
+ * exist and be a real directory. */
 static int f32_resolve_parent(fat32_fs *fs, const char *path,
                               uint32_t *parent_cluster,
                               char *filename, size_t filename_cap) {
@@ -408,10 +410,8 @@ static int f32_resolve_parent(fat32_fs *fs, const char *path,
     return 0;
 }
 
-/* Find a free 32-byte slot (never-used 0x00 or deleted 0xE5) in a
- * directory chain.
- * Returns 1 when a slot is found, 0 when the chain is exhausted (the
- * caller may grow it via f32_grow_dir), -1 on I/O error. */
+/* Find an empty spot in a directory for a new entry. Returns 1 if we
+ * found one, 0 if the directory needs to grow, -1 on I/O failure. */
 static int f32_find_free_slot(fat32_fs *fs, uint32_t dir_cluster,
                               uint32_t *out_offset, uint32_t *prev_cluster) {
     uint8_t cbuf[4096];
@@ -440,8 +440,7 @@ static int f32_find_free_slot(fat32_fs *fs, uint32_t dir_cluster,
     return 0;
 }
 
-/* Append one zeroed cluster to a directory chain; the new slot sits at
- * offset 0 of that cluster.  Returns 0 on success. */
+/* Make room in a directory by adding a fresh zeroed cluster to its chain. */
 static int f32_grow_dir(fat32_fs *fs, uint32_t prev_cluster,
                         uint32_t *new_offset) {
     uint32_t new_cl = f32_alloc_cluster(fs);
@@ -467,7 +466,7 @@ static int f32_grow_dir(fat32_fs *fs, uint32_t prev_cluster,
     return 0;
 }
 
-/* ---------- VFS ops ---------- */
+/* These are the actual VFS callbacks FAT32 implements. */
 
 static int f32_vfs_open(vfs_mount *m, const char *path, vfs_file *out) {
     fat32_fs *fs = (fat32_fs *)m->fs_data;
@@ -495,7 +494,7 @@ static int f32_vfs_open(vfs_mount *m, const char *path, vfs_file *out) {
             continue;
         }
 
-        f32_upper(comp); /* case-insensitive lookup */
+        f32_upper(comp); /* names on disk are always caps */
 
         find_ctx ctx;
         memcpy(ctx.needle, comp, sizeof(ctx.needle));
@@ -519,7 +518,7 @@ static int f32_vfs_open(vfs_mount *m, const char *path, vfs_file *out) {
     }
 
     if (!found_any) {
-        /* Empty path -> root directory. */
+        /* Empty path means the root directory. */
         out->mount = m;
         out->size = 0;
         out->type = VFS_TYPE_DIR;
@@ -560,8 +559,8 @@ static int f32_vfs_read(vfs_mount *m, vfs_file *f, uint64_t offset,
     if (size == 0) { *got = 0; return 0; }
     if (offset >= f->size) { *got = 0; return 0; }
 
-    /* Clamp the request to the declared file size so we never expose
-     * slack bytes stored past EOF in the last cluster. */
+    /* Don't read past the end of the file — the last cluster may have
+     * junk bytes in it beyond the real size. */
     uint64_t avail = f->size - offset;
     if (size > avail) {
         size = avail;
@@ -604,8 +603,8 @@ static int f32_vfs_read(vfs_mount *m, vfs_file *f, uint64_t offset,
     return 0;
 }
 
-/* Persist the cached handle state (first cluster + size) back into the
- * on-disk directory entry after a write changes either of them. */
+/* If a write changed the file's cluster or size, write that back to the
+ * directory entry on disk so it isn't lost. */
 static void f32_sync_dirent(fat32_fs *fs, fat32_fhandle *fh,
                             uint32_t orig_first, uint32_t orig_size) {
     if (fh->first_cluster == orig_first && fh->size == orig_size) {
@@ -625,9 +624,9 @@ static void f32_sync_dirent(fat32_fs *fs, fat32_fhandle *fh,
     f32_write_dir_entry(fs, fh->parent_cluster, fh->entry_offset, entry_buf);
 }
 
-/* Write `size` bytes at `offset`, extending the cluster chain (and thus
- * the file) as needed.  Sparse regions created by seeking past EOF are
- * zero-filled because freshly allocated clusters are cleared first. */
+/* Writes can extend a file, which means grabbing new clusters from the
+ * FAT. If you write past the end, the gap gets zero-filled because we
+ * always clear fresh clusters before using them. */
 static int f32_vfs_write(vfs_mount *m, vfs_file *f, uint64_t offset,
                          uint64_t size, const void *buf, uint64_t *written) {
     fat32_fs *fs = (fat32_fs *)m->fs_data;
@@ -650,8 +649,8 @@ static int f32_vfs_write(vfs_mount *m, vfs_file *f, uint64_t offset,
 
     *written = 0;
 
-    /* Walk the chain until the cluster containing `offset` (or stop at
-     * end-of-chain; fresh clusters get allocated below). */
+    /* Follow the chain until we're at the cluster that holds `offset`.
+     * If we run out of clusters, that's fine — we allocate below. */
     while (cl >= 2 && cl < F32_EOC &&
            pos + fs->cluster_bytes <= offset && guard++ < (1 << 20)) {
         prev_cl = cl;
@@ -662,7 +661,7 @@ static int f32_vfs_write(vfs_mount *m, vfs_file *f, uint64_t offset,
     uint64_t want_end = offset + size;
     while (remaining > 0 && guard++ < (1 << 20)) {
         if (cl < 2 || cl >= F32_EOC) {
-            /* Out of chain — allocate a zeroed cluster and link it. */
+            /* Ran off the end — grab a fresh cluster and link it on. */
             uint32_t new_cl = f32_alloc_cluster(fs);
             if (new_cl == 0) break;             /* volume full */
 
@@ -681,7 +680,7 @@ static int f32_vfs_write(vfs_mount *m, vfs_file *f, uint64_t offset,
             break;
         }
 
-        /* Copy the part of this cluster covered by [offset, want_end). */
+        /* Copy just the bytes of this cluster that we actually need. */
         uint64_t cluster_end = pos + fs->cluster_bytes;
         uint64_t copy_start = pos < offset ? offset : pos;
         uint64_t copy_end = cluster_end < want_end ? cluster_end : want_end;
@@ -720,7 +719,7 @@ static int f32_vfs_readdir(vfs_mount *m, const char *path, int idx,
         return -1;
     }
 
-    /* Resolve the directory cluster: root, or an opened subdirectory. */
+    /* Which directory are we listing? Root, or open the subdirectory. */
     uint32_t dir_cluster = fs->root_cluster;
     const char *p = path;
     while (*p == '/') p++;
@@ -767,7 +766,7 @@ static int f32_vfs_stat(vfs_mount *m, const char *path, uint64_t *size,
     return 0;
 }
 
-/* ---------- write ops: create / unlink / mkdir ---------- */
+/* The mutating operations: create, unlink, and mkdir. */
 
 static int f32_vfs_create(vfs_mount *m, const char *path) {
     fat32_fs *fs = (fat32_fs *)m->fs_data;
@@ -790,7 +789,7 @@ static int f32_vfs_create(vfs_mount *m, const char *path) {
     if (f32_walk_dir(fs, parent_cluster, f32_find_cb, &ctx) != 0) return -1;
     if (ctx.found) return -1;
 
-    /* Locate (or create room for) a free directory slot. */
+    /* Find a slot in the parent, or grow the directory if it's full. */
     uint32_t slot_off = 0;
     uint32_t prev_cl = 0;
     int r = f32_find_free_slot(fs, parent_cluster, &slot_off, &prev_cl);
@@ -800,7 +799,7 @@ static int f32_vfs_create(vfs_mount *m, const char *path) {
         return -1;
     }
 
-    /* Zero-size file with no clusters yet. */
+    /* A brand-new file starts out as just a directory entry, no data. */
     uint8_t entry[32];
     memset(entry, 0, sizeof(entry));
     f32_to_83(filename, entry);
@@ -830,10 +829,10 @@ static int f32_vfs_unlink(vfs_mount *m, const char *path) {
     if (!ctx.found) return -1;                /* no such file */
 
     if (ctx.found_entry[0x0B] & ATTR_DIR) {
-        return -1;                            /* refuse to rmdir via rm */
+        return -1;                            /* can't rm a directory */
     }
 
-    /* Release the data clusters before dropping the reference. */
+    /* Free its data clusters first, then remove the directory entry. */
     uint32_t first_cl = f32_entry_cluster(ctx.found_entry);
     if (first_cl >= 2 && first_cl < F32_EOC) {
         f32_free_chain(fs, first_cl);
@@ -841,7 +840,7 @@ static int f32_vfs_unlink(vfs_mount *m, const char *path) {
 
     uint8_t entry_buf[32];
     memcpy(entry_buf, ctx.found_entry, 32);
-    entry_buf[0] = 0xE5;                      /* tombstone marker */
+    entry_buf[0] = 0xE5;                      /* the "deleted" marker */
     return f32_write_dir_entry(fs, ctx.parent_cluster,
                                ctx.entry_offset, entry_buf);
 }
@@ -876,7 +875,7 @@ static int f32_vfs_mkdir(vfs_mount *m, const char *path) {
         return -1;
     }
 
-    /* A fresh cluster to hold the new directory's entries. */
+    /* Grab a cluster to store the new directory's entries in. */
     uint32_t new_cl = f32_alloc_cluster(fs);
     if (new_cl == 0) return -1;
 
@@ -887,13 +886,13 @@ static int f32_vfs_mkdir(vfs_mount *m, const char *path) {
     }
     memset(dbuf, 0, fs->cluster_bytes);
 
-    /* "." points at the directory itself. */
+    /* "." is this directory itself. */
     memset(dbuf, ' ', 11);
     dbuf[0] = '.';
     dbuf[0x0B] = ATTR_DIR;
     f32_set_entry_cluster(dbuf, new_cl);
 
-    /* ".." points at the parent directory. */
+    /* ".." points back at whoever owns it. */
     memset(dbuf + 32, ' ', 11);
     dbuf[32] = '.';
     dbuf[33] = '.';
@@ -911,7 +910,7 @@ static int f32_vfs_mkdir(vfs_mount *m, const char *path) {
     memset(entry, 0, sizeof(entry));
     f32_to_83(dirname, entry);
     entry[0x0B] = ATTR_DIR;
-    f32_set_entry_cluster(entry, new_cl);     /* size stays 0 for dirs */
+    f32_set_entry_cluster(entry, new_cl);     /* directories have no size */
 
     if (f32_write_dir_entry(fs, parent_cluster, slot_off, entry) != 0) {
         f32_set_fat_entry(fs, new_cl, 0);
@@ -920,7 +919,7 @@ static int f32_vfs_mkdir(vfs_mount *m, const char *path) {
     return 0;
 }
 
-/* ---------- mount / BPB validation ---------- */
+/* Mounting: check the boot sector looks like a real FAT32 volume. */
 
 int fat32_mount(block_device *dev, fat32_fs *fs) {
     if (dev == NULL || fs == NULL) {
@@ -946,8 +945,8 @@ int fat32_mount(block_device *dev, fat32_fs *fs) {
     uint32_t root_cl  = (uint32_t)bpb[44] | ((uint32_t)bpb[45] << 8) |
                         ((uint32_t)bpb[46] << 16) | ((uint32_t)bpb[47] << 24);
 
-    if (bps != 512) return -1;              /* our block layer is 512-byte */
-    if (spc == 0 || (spc & (spc - 1)) != 0) return -1; /* must be power of 2 */
+    if (bps != 512) return -1;              /* our block layer only does 512 */
+    if (spc == 0 || (spc & (spc - 1)) != 0) return -1; /* needs to be a power of 2 */
     if (reserved == 0 || fatc == 0 || fat_sz == 0 || root_cl < 2) {
         return -1;
     }

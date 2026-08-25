@@ -1,13 +1,9 @@
 /*
  * MyOS RAM-disk driver.
  *
- * Each RAM disk wraps a contiguous chunk of memory (loaded by Limine as a
- * module) behind the generic block_device interface.  Reads and writes are
- * simple memcpy operations — no I/O port access is needed.
- *
- * The driver is read-only by default when the backing memory region is in
- * the LIMINE_MEMMAP_EXECUTABLE_AND_MODULES area and we want to protect it.
- * For development/testing we allow writes to the in-RAM copy.
+ * A RAM disk is just a chunk of memory loaded by Limine as a module,
+ * presented as a block device. Reads and writes are plain memcpy calls —
+ * no hardware access is involved.
  */
 
 #include "kernel/blockdev.h"
@@ -22,7 +18,7 @@
 
 extern volatile struct limine_module_request limine_module_request;
 
-/* Minimal serial debug for headless boot verification. */
+/* Serial helpers so RAM-disk init shows up in the boot log. */
 static inline void rd_putc(char c) { outb(0x3F8, (uint8_t)c); }
 static void rd_write(const char *s) { while (*s) rd_putc(*s++); }
 static void rd_hex64(uint64_t v) {
@@ -31,7 +27,7 @@ static void rd_hex64(uint64_t v) {
     for (int i = 15; i >= 0; --i) rd_putc(d[(v >> (i * 4)) & 0xF]);
 }
 
-/* Each RAM disk stores its backing-buffer pointer in dev_data. */
+/* Each RAM disk keeps its buffer and size here. */
 struct ramdisk_data {
     uint8_t *buffer;
     uint64_t  byte_size;
@@ -66,8 +62,7 @@ static const char *ramdisk_names[] = {
     "ramdisk4", "ramdisk5", "ramdisk6", "ramdisk7"
 };
 
-/* Called from main.c after VMM initialisation.  Scans Limine modules
- * and creates one RAM disk per module. */
+/* Scan Limine modules and create a RAM disk for each one. */
 void ramdisk_init(void) {
     if (limine_module_request.response == NULL) {
         rd_write("RAMDISK: no module response\n");
@@ -96,7 +91,7 @@ void ramdisk_init(void) {
         struct ramdisk_data *rd = kmalloc(sizeof(struct ramdisk_data));
 
         if (dev == NULL || rd == NULL) {
-            /* If we can't allocate the bookkeeping, skip this module. */
+            /* No memory for bookkeeping — skip this module. */
             continue;
         }
 
@@ -111,8 +106,8 @@ void ramdisk_init(void) {
         dev->write        = ramdisk_write;
         dev->next         = NULL;
 
-        if (blockdev_register(dev) != 0) {
-            /* Registration failed (likely duplicate name); free and skip. */
-        }
+        /* Registration fails only on a duplicate name, which can't
+         * happen here; if it does, we just move on. */
+        blockdev_register(dev);
     }
 }

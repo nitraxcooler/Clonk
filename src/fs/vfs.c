@@ -1,9 +1,9 @@
 /*
  * MyOS Virtual Filesystem — mount table and dispatch.
  *
- * The VFS keeps a small mount table and routes filesystem API calls to the
- * registered ops vtable of the mount whose prefix best matches the path.
- * It contains no filesystem logic itself.
+ * The VFS keeps a list of mounted filesystems and routes API calls to
+ * the filesystem whose mount point best matches the path. It doesn't
+ * know anything about FAT32 or any other filesystem itself.
  */
 
 #include "fs/vfs.h"
@@ -33,7 +33,7 @@ int vfs_do_mount(const char *mount_point, const char *fs_name,
         return -1;
     }
 
-    /* Refuse duplicate mount points. */
+    /* Don't allow the same mount point twice. */
     for (int i = 0; i < VFS_MAX_MOUNTS; ++i) {
         if (vfs_mounts[i].in_use &&
             strcmp(vfs_mounts[i].path, mount_point) == 0) {
@@ -52,7 +52,7 @@ int vfs_do_mount(const char *mount_point, const char *fs_name,
             return 0;
         }
     }
-    return -1; /* table full */
+    return -1; /* no free slot in the mount table */
 }
 
 int vfs_unmount(const char *mount_point) {
