@@ -366,6 +366,10 @@ uint64_t vm_get_mapped_pages(void) {
     return vmm_mapped_pages;
 }
 
+uint64_t vm_phys_to_virt(uint64_t physical_address) {
+    return physical_address + vmm_hhdm_offset;
+}
+
 uint64_t vm_get_page_table_count(void) {
     return vmm_page_table_count;
 }

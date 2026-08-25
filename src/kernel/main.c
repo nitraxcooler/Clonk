@@ -83,7 +83,7 @@ void kprint(const char *str, uint32_t fg_color) {
     }
 }
 
-void kbackspace(void) {
+void kbackspace(void) {2
     if (cursor_x >= 18) {
         cursor_x -= 8;
         draw_char(' ', cursor_x, cursor_y, 0x000000, 0x000000);

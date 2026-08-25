@@ -36,8 +36,12 @@ QEMU_SERIAL ?= stdio
 QEMU_MONITOR ?= none
 
 # Base CFLAGS shared across all compilers
+# -mno-mmx/-mno-sse/-mno-80387: the kernel does not enable SSE in CR0/CR4,
+# so the compiler must not emit SIMD instructions (e.g. for struct copies);
+# otherwise they raise #UD ("Invalid Opcode") at runtime.
 CFLAGS = -Wall -Wextra -std=gnu11 -ffreestanding -fno-stack-protector \
-         -fno-pie -fno-PIC -m64 -march=x86-64 -mno-red-zone -mcmodel=large -I src
+         -fno-pie -fno-PIC -m64 -march=x86-64 -mno-red-zone -mcmodel=large \
+         -mno-mmx -mno-sse -mno-sse2 -mno-80387 -msoft-float -I src
 
 # Append --target only when using Clang
 ifneq ($(findstring clang,$(CC)),)
@@ -50,11 +54,18 @@ C_SOURCES = \
     src/kernel/main.c \
     src/kernel/pmm.c \
     src/kernel/vmm.c \
+    src/kernel/heap.c \
     src/kernel/panic.c \
+    src/kernel/blockdev.c \
+    src/fs/vfs.c \
+    src/fs/fat32.c \
     src/graphics/font.c \
     src/arch/x86_64/idt.c \
     src/drivers/keyboard/keyboard.c \
-    src/lib/string.c
+    src/drivers/storage/ramdisk.c \
+    src/lib/string.c \
+    src/lib/mem.c \
+    src/shell/shell.c
 
 ASM_SOURCES = src/arch/x86_64/isr.s
 
@@ -64,6 +75,9 @@ DEPS = $(OBJS:.o=.d)
 
 ISO_CONFIG = $(ISO_BOOT_DIR)/limine.conf
 ISO_KERNEL = $(ISO_BOOT_DIR)/myos.elf
+ISO_FATIMG = $(ISO_BOOT_DIR)/fat32.img
+FATIMG_SRC = tools/make_fat32_img.py
+FATIMG = $(BUILD_DIR)/fat32.img
 ISO_LIMINE_FILES = \
     $(ISO_BOOT_DIR)/limine-bios-cd.bin \
     $(ISO_BOOT_DIR)/limine-bios.sys \
@@ -93,6 +107,14 @@ $(ISO_KERNEL): $(KERNEL)
 	mkdir -p $(dir $@)
 	cp $< $@
 
+$(FATIMG): $(FATIMG_SRC)
+	@mkdir -p $(BUILD_DIR)
+	python3 $(FATIMG_SRC)
+
+$(ISO_FATIMG): $(FATIMG)
+	@mkdir -p $(dir $@)
+	cp $< $@
+
 $(ISO_BOOT_DIR)/limine-bios-cd.bin: $(LIMINE_DIR)/limine-bios-cd.bin
 	mkdir -p $(dir $@)
 	cp $< $@
@@ -108,7 +130,7 @@ $(ISO_BOOT_DIR)/limine-uefi-cd.bin: $(LIMINE_DIR)/limine-uefi-cd.bin
 $(LIMINE_TOOL):
 	$(MAKE) -C $(LIMINE_DIR)
 
-$(ISO): $(ISO_KERNEL) $(ISO_CONFIG) $(ISO_LIMINE_FILES) $(LIMINE_TOOL)
+$(ISO): $(ISO_KERNEL) $(ISO_CONFIG) $(ISO_FATIMG) $(ISO_LIMINE_FILES) $(LIMINE_TOOL)
 	mkdir -p $(dir $@)
 	xorriso -as mkisofs -b boot/limine-bios-cd.bin \
 	    -no-emul-boot -boot-load-size 4 -boot-info-table \
