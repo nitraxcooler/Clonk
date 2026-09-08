@@ -10,6 +10,7 @@
 
 #include <stddef.h>
 
+#include "drivers/storage/ahci.h"
 #include "kernel/panic.h"
 #include "lib/mem.h"
 #include "lib/string.h"
@@ -109,6 +110,7 @@ uint64_t blockdev_sector_count(block_device *dev) {
 }
 
 void blockdev_init(void) {
-    /* Block devices are registered by their drivers. */
+    /* Each storage driver registers its devices here. */
     ramdisk_init();
+    ahci_init();
 }

@@ -7,6 +7,10 @@
 #include "arch/x86_64/io.h"
 #include "kernel/pmm.h"
 #include "kernel/vmm.h"
+#include "kernel/heap.h"
+#include "kernel/blockdev.h"
+#include "fs/vfs.h"
+#include "fs/fat32.h"
 
 /* Minimal serial debug helpers (COM1 0x3F8) used only for headless debugging */
 static inline void serial_putc(char c) {
@@ -14,6 +18,80 @@ static inline void serial_putc(char c) {
 }
 static void serial_write(const char *s) {
     while (*s) serial_putc(*s++);
+}
+static void serial_hex64(uint64_t v) {
+    const char *d = "0123456789ABCDEF";
+    serial_write("0x");
+    for (int i = 15; i >= 0; --i) serial_putc(d[(v >> (i * 4)) & 0xF]);
+}
+static void serial_dec(uint64_t v) {
+    char tmp[32];
+    int n = 0;
+    if (v == 0) {
+        serial_putc('0');
+        return;
+    }
+    while (v != 0 && n < 31) {
+        tmp[n++] = (char)('0' + (v % 10U));
+        v /= 10U;
+    }
+    while (n > 0) serial_putc(tmp[--n]);
+}
+
+/* Milestone verification: mount the FAT32 image from the first SATA disk
+ * and exercise VFS reads to prove the AHCI DMA path works end-to-end. */
+static void sata_fat32_verify(void) {
+    block_device *sata = blockdev_get("sata0");
+    if (sata == NULL) {
+        serial_write("APP: no sata0 block device\n");
+        return;
+    }
+
+    serial_write("APP: sata0 sectors=");
+    serial_dec(blockdev_sector_count(sata));
+    serial_write(" size=");
+    serial_dec(blockdev_sector_size(sata));
+    serial_write("\n");
+
+    fat32_fs *fs = (fat32_fs *)kmalloc(sizeof(fat32_fs));
+    if (fs == NULL) {
+        serial_write("APP: out of memory for FAT32 fs\n");
+        return;
+    }
+    if (fat32_mount(sata, fs) != 0) {
+        serial_write("APP: FAT32 mount on sata0 failed\n");
+        kfree(fs);
+        return;
+    }
+    if (vfs_do_mount("/", "fat32", sata, &fat32_ops, fs) != 0) {
+        serial_write("APP: VFS mount of sata0 failed\n");
+        kfree(fs);
+        return;
+    }
+    serial_write("APP: FAT32 mounted on / from sata0\n");
+
+    char name[VFS_NAME_MAX];
+    uint32_t type;
+    for (int idx = 0; vfs_readdir("/", idx, name, (size_t)sizeof(name), &type) == 0; ++idx) {
+        serial_write("APP: /");
+        serial_write(name);
+        serial_write(type == VFS_TYPE_DIR ? "/\n" : "\n");
+    }
+
+    vfs_file f;
+    if (vfs_open("/hello.txt", &f) == 0) {
+        char buf[512];
+        uint64_t got = 0;
+        if (vfs_read(&f, 0, sizeof(buf) - 1, buf, &got) == 0 && got > 0) {
+            buf[got] = '\0';
+            serial_write("APP: /hello.txt: ");
+            serial_write(buf);
+            serial_write("\n");
+        }
+        vfs_close(&f);
+    } else {
+        serial_write("APP: could not open /hello.txt\n");
+    }
 }
 
 __attribute__((used, section(".requests")))
@@ -40,6 +118,12 @@ volatile struct limine_hhdm_request limine_hhdm_request = {
 __attribute__((used, section(".requests")))
 volatile struct limine_executable_address_request limine_executable_address_request = {
     .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST_ID,
+    .revision = 0
+};
+
+__attribute__((used, section(".requests")))
+volatile struct limine_module_request limine_module_request = {
+    .id = LIMINE_MODULE_REQUEST_ID,
     .revision = 0
 };
 
@@ -83,7 +167,7 @@ void kprint(const char *str, uint32_t fg_color) {
     }
 }
 
-void kbackspace(void) {2
+void kbackspace(void) {
     if (cursor_x >= 18) {
         cursor_x -= 8;
         draw_char(' ', cursor_x, cursor_y, 0x000000, 0x000000);
@@ -163,6 +247,15 @@ void _start(void) {
     pmm_self_test();
     serial_write("BOOT: running VM self-test\n");
     vm_self_test();
+
+    serial_write("BOOT: initializing heap\n");
+    heap_init();
+    serial_write("BOOT: initializing block devices\n");
+    blockdev_init();
+    serial_write("BOOT: initializing VFS\n");
+    vfs_init();
+    serial_write("BOOT: verifying SATA / FAT32\n");
+    sata_fat32_verify();
 
     serial_write("BOOT: ready for CLI\n");
     kprint("MyOS:> ", 0x00FFFF);

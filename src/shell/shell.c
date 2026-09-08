@@ -395,7 +395,7 @@ void shell_handle_command(const char *cmdline) {
     } else if (strcmp(cmd, "clear") == 0) {
         kclear();
     } else if (strcmp(cmd, "version") == 0) {
-        kprint("MyOS v0.1.0 (x86_64 Long Mode Bare-Metal)\n", SHELL_COL_OK);
+        kprint("MyOS v0.1.1 (x86_64)\n", SHELL_COL_OK);
     } else if (strcmp(cmd, "echo") == 0 && n >= 2) {
         kprint(tok(1), SHELL_TOK_WHITE);
         for (int i = 2; i < n; ++i) {
