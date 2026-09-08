@@ -45,10 +45,11 @@ int         blockdev_write_sectors(block_device *dev, uint64_t lba, uint32_t cou
 uint32_t    blockdev_sector_size(block_device *dev);
 uint64_t    blockdev_sector_count(block_device *dev);
 
-/* --- initialisation (scans Limine modules for RAM disks) --- */
+/* --- initialisation (scans Limine modules for RAM disks, PCI for SATA) --- */
 void        blockdev_init(void);
 
-/* Driver entry point — called by blockdev_init(). */
+/* Driver entry points — called by blockdev_init(). */
 void        ramdisk_init(void);
+void        ahci_init(void);
 
 #endif
