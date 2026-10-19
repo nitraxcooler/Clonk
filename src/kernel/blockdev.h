@@ -45,7 +45,8 @@ uint64_t    blockdev_sector_count(block_device *dev);
 /* Initialise the registry and load available storage drivers. */
 void        blockdev_init(void);
 
-/* RAM-disk driver entry point, called by blockdev_init(). */
+/* Driver entry points called by blockdev_init(). */
 void        ramdisk_init(void);
+void        ahci_init(void);
 
 #endif

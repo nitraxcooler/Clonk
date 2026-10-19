@@ -59,6 +59,8 @@ C_SOURCES = \
     src/kernel/vmm.c \
     src/kernel/elf.c \
     src/kernel/usermode.c \
+    src/kernel/userfs.c \
+    src/kernel/usercopy.c \
     src/kernel/heap.c \
     src/kernel/panic.c \
     src/kernel/blockdev.c \
@@ -69,6 +71,8 @@ C_SOURCES = \
     src/arch/x86_64/gdt.c \
     src/drivers/keyboard/keyboard.c \
     src/drivers/storage/ramdisk.c \
+    src/drivers/storage/ahci.c \
+    src/drivers/pci/pci.c \
     src/lib/string.c \
     src/lib/mem.c \
     src/shell/shell.c
@@ -91,7 +95,7 @@ ISO_LIMINE_FILES = \
     $(ISO_BOOT_DIR)/limine-bios.sys \
     $(ISO_BOOT_DIR)/limine-uefi-cd.bin
 
-.PHONY: all run clean
+.PHONY: all run run-ahci clean
 
 all: $(ISO)
 
@@ -162,6 +166,14 @@ $(ISO): $(ISO_KERNEL) $(ISO_CONFIG) $(ISO_FATIMG) $(ISO_INIT) $(ISO_LIMINE_FILES
 
 run: $(ISO)
 	qemu-system-x86_64 -cdrom $(ISO) -display $(QEMU_DISPLAY) -serial $(QEMU_SERIAL) -monitor $(QEMU_MONITOR) -no-reboot
+
+# Run with the FAT32 test image attached as a SATA disk on QEMU's ICH9
+# AHCI controller (exercises the AHCI driver instead of the RAM disk).
+run-ahci: $(ISO)
+	qemu-system-x86_64 -cdrom $(ISO) -boot order=d -display $(QEMU_DISPLAY) -serial $(QEMU_SERIAL) -monitor $(QEMU_MONITOR) -no-reboot \
+	    -drive file=$(FATIMG),format=raw,if=none,id=disk0 \
+	    -device ich9-ahci,id=ahci \
+	    -device ide-hd,drive=disk0,bus=ahci.0
 
 clean:
 	rm -rf $(BUILD_DIR)

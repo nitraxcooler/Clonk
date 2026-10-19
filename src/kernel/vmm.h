@@ -38,6 +38,8 @@ bool vm_get_page_flags_in(uint64_t pml4_physical_address, uint64_t virtual_addre
                           uint64_t *flags);
 bool vm_is_mapped(uint64_t virtual_address);
 bool vm_user_range_valid(uint64_t pml4_physical_address, uint64_t address, uint64_t length);
+bool vm_user_range_writable(uint64_t pml4_physical_address, uint64_t address,
+                            uint64_t length);
 bool vm_destroy_address_space(uint64_t pml4_physical_address);
 
 /* Map a physical address up into the higher-half so we can touch it. */

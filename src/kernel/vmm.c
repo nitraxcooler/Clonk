@@ -436,36 +436,46 @@ bool vm_get_page_flags_in(uint64_t pml4_physical_address, uint64_t virtual_addre
     return true;
 }
 
-static bool vm_user_page_mapped(uint64_t pml4_physical_address, uint64_t address) {
+static bool vm_user_page_accessible(uint64_t pml4_physical_address, uint64_t address,
+                                    bool require_write) {
+    uint64_t required = VMM_PAGE_PRESENT | VMM_PAGE_USER;
+    if (require_write) required |= VMM_PAGE_WRITABLE;
     uint64_t *pml4 = (uint64_t *)vmm_phys_to_virt(pml4_physical_address);
     uint64_t pml4_entry = pml4[(address >> 39) & 0x1FFU];
-    if ((pml4_entry & (VMM_PAGE_PRESENT | VMM_PAGE_USER)) !=
-        (VMM_PAGE_PRESENT | VMM_PAGE_USER)) return false;
+    if ((pml4_entry & required) != required) return false;
     uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(pml4_entry & VMM_PAGE_ADDRESS_MASK);
     uint64_t pdpt_entry = pdpt[(address >> 30) & 0x1FFU];
-    if ((pdpt_entry & (VMM_PAGE_PRESENT | VMM_PAGE_USER)) !=
-        (VMM_PAGE_PRESENT | VMM_PAGE_USER) || (pdpt_entry & VMM_PAGE_LARGE)) return false;
+    if ((pdpt_entry & required) != required || (pdpt_entry & VMM_PAGE_LARGE)) return false;
     uint64_t *pd = (uint64_t *)vmm_phys_to_virt(pdpt_entry & VMM_PAGE_ADDRESS_MASK);
     uint64_t pd_entry = pd[(address >> 21) & 0x1FFU];
-    if ((pd_entry & (VMM_PAGE_PRESENT | VMM_PAGE_USER)) !=
-        (VMM_PAGE_PRESENT | VMM_PAGE_USER) || (pd_entry & VMM_PAGE_LARGE)) return false;
+    if ((pd_entry & required) != required || (pd_entry & VMM_PAGE_LARGE)) return false;
     uint64_t *pt = (uint64_t *)vmm_phys_to_virt(pd_entry & VMM_PAGE_ADDRESS_MASK);
     uint64_t pt_entry = pt[(address >> 12) & 0x1FFU];
-    return (pt_entry & (VMM_PAGE_PRESENT | VMM_PAGE_USER)) ==
-           (VMM_PAGE_PRESENT | VMM_PAGE_USER);
+    return (pt_entry & required) == required;
 }
 
-bool vm_user_range_valid(uint64_t pml4_physical_address, uint64_t address, uint64_t length) {
+static bool vm_user_range_access_valid(uint64_t pml4_physical_address,
+                                       uint64_t address, uint64_t length,
+                                       bool require_write) {
     const uint64_t user_limit = 0x0000800000000000ULL;
     if (pml4_physical_address == 0U || address >= user_limit ||
         length > user_limit - address) return false;
     if (length == 0U) return true;
     uint64_t last = address + length - 1U;
     for (uint64_t page = address & ~0xFFFULL; page <= (last & ~0xFFFULL); page += VMM_PAGE_SIZE) {
-        if (!vm_user_page_mapped(pml4_physical_address, page)) return false;
+        if (!vm_user_page_accessible(pml4_physical_address, page, require_write)) return false;
         if (page > UINT64_MAX - VMM_PAGE_SIZE) return false;
     }
     return true;
+}
+
+bool vm_user_range_valid(uint64_t pml4_physical_address, uint64_t address, uint64_t length) {
+    return vm_user_range_access_valid(pml4_physical_address, address, length, false);
+}
+
+bool vm_user_range_writable(uint64_t pml4_physical_address, uint64_t address,
+                            uint64_t length) {
+    return vm_user_range_access_valid(pml4_physical_address, address, length, true);
 }
 
 static bool vm_destroy_lower_table(uint64_t physical_address, unsigned int level) {

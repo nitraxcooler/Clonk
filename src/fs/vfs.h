@@ -25,6 +25,19 @@
 #define VFS_TYPE_FILE      0
 #define VFS_TYPE_DIR       1
 
+#define VFS_READDIR_EOF       1
+#define VFS_ERR_INVALID      -1
+#define VFS_ERR_NOT_FOUND    -2
+#define VFS_ERR_NOT_DIRECTORY -3
+#define VFS_ERR_IS_DIRECTORY -4
+#define VFS_ERR_EXISTS       -5
+#define VFS_ERR_NO_MEMORY    -6
+#define VFS_ERR_NO_SPACE     -7
+#define VFS_ERR_READ_ONLY    -8
+#define VFS_ERR_IO           -9
+#define VFS_ERR_OPERATION   -10
+#define VFS_ERR_LIMIT       -11
+
 /* A handle to an opened file/directory. */
 typedef struct vfs_file {
     void       *mount;      /* vfs_mount*  */
@@ -53,9 +66,11 @@ struct vfs_fs_ops {
     int (*write)(vfs_mount *m, vfs_file *f, uint64_t offset,
                  uint64_t size, const void *buf, uint64_t *written);
 
+    /* Resize a file; the current FAT32 backend supports truncation to zero. */
+    int (*truncate)(vfs_mount *m, vfs_file *f, uint64_t size);
+
     /* List directory entries. `idx` is the zero-based entry index.
-     * Returns 0 and fills `name`/`type` on success, non-zero past the
-     * last entry. */
+     * Returns 0 for an entry, VFS_READDIR_EOF at end, or a negative error. */
     int (*readdir)(vfs_mount *m, const char *path, int idx,
                    char *name, size_t name_cap, uint32_t *type);
 
@@ -98,6 +113,7 @@ int      vfs_read(vfs_file *f, uint64_t offset, uint64_t size,
                   void *buf, uint64_t *got);
 int      vfs_write(vfs_file *f, uint64_t offset, uint64_t size,
                   const void *buf, uint64_t *written);
+int      vfs_truncate(vfs_file *f, uint64_t size);
 int      vfs_readdir(const char *path, int idx, char *name,
                      size_t name_cap, uint32_t *type);
 int      vfs_stat(const char *path, uint64_t *size, uint32_t *type);

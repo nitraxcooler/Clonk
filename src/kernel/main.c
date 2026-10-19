@@ -24,6 +24,80 @@ static inline void serial_putc(char c) {
 static void serial_write(const char *s) {
     while (*s) serial_putc(*s++);
 }
+static void serial_hex64(uint64_t v) {
+    const char *d = "0123456789ABCDEF";
+    serial_write("0x");
+    for (int i = 15; i >= 0; --i) serial_putc(d[(v >> (i * 4)) & 0xF]);
+}
+static void serial_dec(uint64_t v) {
+    char tmp[32];
+    int n = 0;
+    if (v == 0) {
+        serial_putc('0');
+        return;
+    }
+    while (v != 0 && n < 31) {
+        tmp[n++] = (char)('0' + (v % 10U));
+        v /= 10U;
+    }
+    while (n > 0) serial_putc(tmp[--n]);
+}
+
+/* Milestone verification: mount the FAT32 image from the first SATA disk
+ * and exercise VFS reads to prove the AHCI DMA path works end-to-end. */
+static void sata_fat32_verify(void) {
+    block_device *sata = blockdev_get("sata0");
+    if (sata == NULL) {
+        serial_write("APP: no sata0 block device\n");
+        return;
+    }
+
+    serial_write("APP: sata0 sectors=");
+    serial_dec(blockdev_sector_count(sata));
+    serial_write(" size=");
+    serial_dec(blockdev_sector_size(sata));
+    serial_write("\n");
+
+    fat32_fs *fs = (fat32_fs *)kmalloc(sizeof(fat32_fs));
+    if (fs == NULL) {
+        serial_write("APP: out of memory for FAT32 fs\n");
+        return;
+    }
+    if (fat32_mount(sata, fs) != 0) {
+        serial_write("APP: FAT32 mount on sata0 failed\n");
+        kfree(fs);
+        return;
+    }
+    if (vfs_do_mount("/sata", "fat32", sata, &fat32_ops, fs) != 0) {
+        serial_write("APP: VFS mount of sata0 at /sata failed\n");
+        kfree(fs);
+        return;
+    }
+    serial_write("APP: FAT32 mounted at /sata from sata0\n");
+
+    char name[VFS_NAME_MAX];
+    uint32_t type;
+    for (int idx = 0; vfs_readdir("/sata", idx, name, (size_t)sizeof(name), &type) == 0; ++idx) {
+        serial_write("APP: /sata/");
+        serial_write(name);
+        serial_write(type == VFS_TYPE_DIR ? "/\n" : "\n");
+    }
+
+    vfs_file f;
+    if (vfs_open("/sata/hello.txt", &f) == 0) {
+        char buf[512];
+        uint64_t got = 0;
+        if (vfs_read(&f, 0, sizeof(buf) - 1, buf, &got) == 0 && got > 0) {
+            buf[got] = '\0';
+            serial_write("APP: /sata/hello.txt: ");
+            serial_write(buf);
+            serial_write("\n");
+        }
+        vfs_close(&f);
+    } else {
+        serial_write("APP: could not open /sata/hello.txt\n");
+    }
+}
 
 __attribute__((used, section(".requests")))
 volatile uint64_t limine_base_revision[3] = LIMINE_BASE_REVISION(0);
@@ -49,6 +123,12 @@ volatile struct limine_hhdm_request limine_hhdm_request = {
 __attribute__((used, section(".requests")))
 volatile struct limine_executable_address_request limine_executable_address_request = {
     .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST_ID,
+    .revision = 0
+};
+
+__attribute__((used, section(".requests")))
+volatile struct limine_module_request limine_module_request = {
+    .id = LIMINE_MODULE_REQUEST_ID,
     .revision = 0
 };
 
@@ -162,11 +242,26 @@ static void initialize_storage(void) {
     }
 
     blockdev_init();
-    block_device *dev = blockdev_get_by_index(0);
+    block_device *dev = blockdev_get("ramdisk0");
+    if (dev == NULL) {
+        for (uint64_t i = 0; i < blockdev_get_count(); ++i) {
+            block_device *candidate = blockdev_get_by_index((int)i);
+            if (candidate != NULL && candidate->write != NULL) {
+                dev = candidate;
+                break;
+            }
+        }
+    }
+    if (dev == NULL) {
+        dev = blockdev_get_by_index(0);
+    }
     if (dev == NULL) {
         serial_write("STORAGE: no boot disk module found\n");
         kprint("No boot disk module found.\n", 0xFF0000);
         return;
+    }
+    if (dev->write == NULL) {
+        serial_write("STORAGE: root device is read-only\n");
     }
     if (fat32_mount(dev, &boot_fat32) != 0) {
         serial_write("STORAGE: FAT32 mount failed\n");
@@ -250,6 +345,8 @@ void _start(void) {
     heap_init();
     serial_write("BOOT: initializing storage\n");
     initialize_storage();
+    serial_write("BOOT: verifying SATA / FAT32\n");
+    sata_fat32_verify();
 
     serial_write("BOOT: launching userspace /init\n");
     usermode_run_init();

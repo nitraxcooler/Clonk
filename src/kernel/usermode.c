@@ -11,7 +11,10 @@
 #include "drivers/keyboard/keyboard.h"
 #include "kernel/elf.h"
 #include "kernel/panic.h"
+#include "kernel/usercopy.h"
+#include "kernel/userfs.h"
 #include "kernel/vmm.h"
+#include "lib/mem.h"
 
 extern void kputc(char c, uint32_t fg_color);
 extern void kbackspace(void);
@@ -19,11 +22,7 @@ extern void kclear(void);
 
 #define USER_OUTPUT_COLOR 0xFFFFFFU
 
-__attribute__((used, section(".requests")))
-volatile struct limine_module_request limine_module_request = {
-    .id = LIMINE_MODULE_REQUEST_ID,
-    .revision = 0
-};
+extern volatile struct limine_module_request limine_module_request;
 
 volatile uint64_t arch_saved_kernel_rsp;
 volatile uint64_t arch_saved_kernel_rflags;
@@ -69,6 +68,7 @@ static void process_finish(const char *message) __attribute__((noreturn));
 static void process_finish(const char *message) {
     serial_write(message);
     if (!process_active) kernel_panic("USER_PROCESS_STATE_INVALID");
+    userfs_close_all();
     uint64_t dead_address_space = process_address_space;
     process_active = false;
     process_address_space = 0;
@@ -94,6 +94,7 @@ void usermode_run_init(void) {
         kernel_panic("INIT_ELF_INVALID");
     }
 
+    userfs_initialize();
     process_active = true;
     keyboard_set_user_mode(true);
     serial_write("USER: entering /init\n");
@@ -108,6 +109,7 @@ int64_t syscall_dispatch(const uint64_t *saved_registers) {
     uint64_t number = saved_registers[14];
     uint64_t arg1 = saved_registers[9];
     uint64_t arg2 = saved_registers[10];
+    uint64_t arg3 = saved_registers[11];
 
     if (!process_active) {
         kernel_panic("SYSCALL_WITHOUT_USER_PROCESS");
@@ -116,7 +118,10 @@ int64_t syscall_dispatch(const uint64_t *saved_registers) {
         if (arg2 > 256U || !vm_user_range_valid(process_address_space, arg1, arg2)) {
             return -1;
         }
-        const char *text = (const char *)(uintptr_t)arg1;
+        char text[256];
+        if (!user_copy_from(process_address_space, text, arg1, (size_t)arg2)) {
+            return -1;
+        }
         for (uint64_t i = 0; i < arg2; ++i) {
             if (text[i] == '\b') {
                 outb(0x3F8, '\b');
@@ -131,16 +136,18 @@ int64_t syscall_dispatch(const uint64_t *saved_registers) {
     if (number == MYOS_SYS_READ) {
         uint64_t flags;
         if (arg2 != 1U || !vm_user_range_valid(process_address_space, arg1, 1U) ||
+            !vm_user_range_writable(process_address_space, arg1, 1U) ||
             !vm_get_page_flags_in(process_address_space, arg1, &flags) ||
-            (flags & (VMM_PAGE_USER | VMM_PAGE_WRITABLE)) !=
-                (VMM_PAGE_USER | VMM_PAGE_WRITABLE)) {
+            (flags & VMM_PAGE_USER) == 0U) {
             return -1;
         }
         char character;
         if (!keyboard_read_user_char(&character)) {
             return -1;
         }
-        *(volatile char *)(uintptr_t)arg1 = character;
+        if (!user_copy_to(process_address_space, arg1, &character, sizeof(character))) {
+            return -1;
+        }
         return 1;
     }
     if (number == MYOS_SYS_CLEAR) {
@@ -152,6 +159,11 @@ int64_t syscall_dispatch(const uint64_t *saved_registers) {
     }
     if (number == MYOS_SYS_EXIT) {
         process_finish("USER: /init requested exit\n");
+    }
+    int64_t filesystem_result;
+    if (userfs_handle_syscall(number, arg1, arg2, arg3,
+                              process_address_space, &filesystem_result)) {
+        return filesystem_result;
     }
     return -1;
 }

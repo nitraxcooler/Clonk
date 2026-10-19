@@ -119,6 +119,32 @@ static void f32_to_83(const char *name, uint8_t *out) {
     }
 }
 
+static int f32_short_name_valid(const char *name) {
+    size_t base_len = 0;
+    size_t ext_len = 0;
+    int in_extension = 0;
+    if (name == NULL || name[0] == '\0') return 0;
+
+    for (size_t i = 0; name[i] != '\0'; ++i) {
+        char c = name[i];
+        if (c == '.') {
+            if (in_extension || base_len == 0U) return 0;
+            in_extension = 1;
+            continue;
+        }
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '~')) {
+            return 0;
+        }
+        if (in_extension) {
+            if (++ext_len > 3U) return 0;
+        } else if (++base_len > 8U) {
+            return 0;
+        }
+    }
+    return base_len != 0U && (!in_extension || ext_len != 0U);
+}
+
 /* The low-level stuff: talking to clusters and FAT entries. */
 
 static int f32_read_cluster(fat32_fs *fs, uint32_t cluster, void *buf) {
@@ -191,8 +217,8 @@ static uint32_t f32_alloc_cluster(fat32_fs *fs) {
         if (f32_fat_entry(fs, cl) == 0) {          /* 0 = free */
             uint32_t next = cl + 1;
             if (next >= 2 + total_clusters) next = 2;
+            if (f32_set_fat_entry(fs, cl, F32_EOC) != 0) return 0;
             fs->next_cluster = next;
-            f32_set_fat_entry(fs, cl, F32_EOC);
             return cl;
         }
         cl++;
@@ -210,14 +236,14 @@ static int f32_free_chain(fat32_fs *fs, uint32_t first_cluster) {
 
     while (cl >= 2 && cl < F32_EOC && guard++ < (1 << 20)) {
         uint32_t next = f32_fat_entry(fs, cl);
-        f32_set_fat_entry(fs, cl, 0);
+        if (next == 0U || f32_set_fat_entry(fs, cl, 0) != 0) return -1;
         if (next >= 2 && next < F32_EOC) {
             cl = next;
         } else {
             break;
         }
     }
-    return 0;
+    return guard >= (1 << 20) ? -1 : 0;
 }
 
 /* Everything that walks through directories. */
@@ -354,11 +380,15 @@ static int f32_readdir_cb(const uint8_t *e, uint32_t dir_cluster,
 static int f32_resolve_parent(fat32_fs *fs, const char *path,
                               uint32_t *parent_cluster,
                               char *filename, size_t filename_cap) {
+    if (fs == NULL || path == NULL || parent_cluster == NULL ||
+        filename == NULL || filename_cap < 2U) {
+        return VFS_ERR_INVALID;
+    }
     const char *p = path;
     uint32_t dir_cluster = fs->root_cluster;
 
     while (*p == '/') p++;
-    if (*p == '\0') return -1;              /* "/" has no filename */
+    if (*p == '\0') return VFS_ERR_INVALID;  /* "/" has no filename */
 
     /* Split at the last '/'. */
     const char *last_slash = NULL;
@@ -368,13 +398,15 @@ static int f32_resolve_parent(fat32_fs *fs, const char *path,
 
     const char *fn_start = last_slash ? last_slash + 1 : p;
     size_t fn_len = 0;
-    while (fn_start[fn_len] && fn_start[fn_len] != '/' &&
-           fn_len < filename_cap - 1) {
+    while (fn_start[fn_len] != '\0' && fn_len < filename_cap - 1U) {
         filename[fn_len] = fn_start[fn_len];
         fn_len++;
     }
     filename[fn_len] = '\0';
-    if (fn_len == 0) return -1;             /* trailing slash, no name */
+    if (fn_start[fn_len] != '\0' || fn_len == 0U ||
+        !f32_short_name_valid(filename)) {
+        return VFS_ERR_INVALID;
+    }
 
     /* Walk every component before the final one. */
     p = path;
@@ -387,22 +419,24 @@ static int f32_resolve_parent(fat32_fs *fs, const char *path,
         while (p < dir_end && *p != '/' && n < 12) {
             comp[n++] = *p++;
         }
+        if (p < dir_end && *p != '/') return VFS_ERR_INVALID;
         comp[n] = '\0';
         while (p < dir_end && *p == '/') p++;
         if (n == 0 || strcmp(comp, ".") == 0) continue;
         /* ".." is not supported on write paths for now. */
-        if (strcmp(comp, "..") == 0) return -1;
+        if (strcmp(comp, "..") == 0 || !f32_short_name_valid(comp)) {
+            return VFS_ERR_INVALID;
+        }
 
         f32_upper(comp);
 
         find_ctx fc;
         memcpy(fc.needle, comp, sizeof(fc.needle));
         fc.found = 0;
-        if (f32_walk_dir(fs, dir_cluster, f32_find_cb, &fc) != 0 || !fc.found) {
-            return -1;
-        }
+        if (f32_walk_dir(fs, dir_cluster, f32_find_cb, &fc) != 0) return VFS_ERR_IO;
+        if (!fc.found) return VFS_ERR_NOT_FOUND;
         const uint8_t *e = fc.found_entry;
-        if (!(e[0x0B] & ATTR_DIR)) return -1;
+        if (!(e[0x0B] & ATTR_DIR)) return VFS_ERR_NOT_DIRECTORY;
         dir_cluster = f32_entry_cluster(e);
     }
 
@@ -444,23 +478,26 @@ static int f32_find_free_slot(fat32_fs *fs, uint32_t dir_cluster,
 static int f32_grow_dir(fat32_fs *fs, uint32_t prev_cluster,
                         uint32_t *new_offset) {
     uint32_t new_cl = f32_alloc_cluster(fs);
-    if (new_cl == 0) return -1;
+    if (new_cl == 0) return VFS_ERR_NO_SPACE;
 
     uint8_t *buf = kmalloc(fs->cluster_bytes);
     if (buf == NULL) {
         f32_set_fat_entry(fs, new_cl, 0);
-        return -1;
+        return VFS_ERR_NO_MEMORY;
     }
     memset(buf, 0, fs->cluster_bytes);
     if (f32_write_cluster(fs, new_cl, buf) != 0) {
         kfree(buf);
         f32_set_fat_entry(fs, new_cl, 0);
-        return -1;
+        return VFS_ERR_IO;
     }
     kfree(buf);
 
     if (prev_cluster >= 2 && prev_cluster < F32_EOC) {
-        f32_set_fat_entry(fs, prev_cluster, new_cl);
+        if (f32_set_fat_entry(fs, prev_cluster, new_cl) != 0) {
+            f32_set_fat_entry(fs, new_cl, 0);
+            return VFS_ERR_IO;
+        }
     }
     *new_offset = 0;
     return 0;
@@ -469,7 +506,9 @@ static int f32_grow_dir(fat32_fs *fs, uint32_t prev_cluster,
 /* These are the actual VFS callbacks FAT32 implements. */
 
 static int f32_vfs_open(vfs_mount *m, const char *path, vfs_file *out) {
+    if (m == NULL || path == NULL || out == NULL) return VFS_ERR_INVALID;
     fat32_fs *fs = (fat32_fs *)m->fs_data;
+    if (fs == NULL || !fs->valid) return VFS_ERR_OPERATION;
     uint32_t dir_cluster = fs->root_cluster;
     const char *p = path;
     uint32_t comp_cluster = 0;
@@ -485,7 +524,8 @@ static int f32_vfs_open(vfs_mount *m, const char *path, vfs_file *out) {
 
         char comp[13];
         int n = 0;
-        while (*p && *p != '/' && n < 12) {
+        while (*p && *p != '/') {
+            if (n >= 12) return VFS_ERR_INVALID;
             comp[n++] = *p++;
         }
         comp[n] = '\0';
@@ -493,6 +533,7 @@ static int f32_vfs_open(vfs_mount *m, const char *path, vfs_file *out) {
         if (strcmp(comp, ".") == 0 || strcmp(comp, "..") == 0) {
             continue;
         }
+        if (!f32_short_name_valid(comp)) return VFS_ERR_INVALID;
 
         f32_upper(comp); /* names on disk are always caps */
 
@@ -501,9 +542,11 @@ static int f32_vfs_open(vfs_mount *m, const char *path, vfs_file *out) {
         ctx.found = 0;
         ctx.parent_cluster = 0;
         ctx.entry_offset = 0;
-        f32_walk_dir(fs, dir_cluster, f32_find_cb, &ctx);
+        if (f32_walk_dir(fs, dir_cluster, f32_find_cb, &ctx) != 0) {
+            return VFS_ERR_IO;
+        }
         if (!ctx.found) {
-            return -1; /* component not found */
+            return VFS_ERR_NOT_FOUND;
         }
 
         const uint8_t *e = ctx.found_entry;
@@ -514,6 +557,9 @@ static int f32_vfs_open(vfs_mount *m, const char *path, vfs_file *out) {
 
         last_parent = dir_cluster;   /* directory that holds this entry */
         last_off = ctx.entry_offset;
+        const char *next = p;
+        while (*next == '/') ++next;
+        if (*next != '\0' && !comp_is_dir) return VFS_ERR_NOT_DIRECTORY;
         dir_cluster = comp_cluster;
     }
 
@@ -528,7 +574,7 @@ static int f32_vfs_open(vfs_mount *m, const char *path, vfs_file *out) {
 
     fat32_fhandle *fh = (fat32_fhandle *)kmalloc(sizeof(fat32_fhandle));
     if (fh == NULL) {
-        return -1;
+        return VFS_ERR_NO_MEMORY;
     }
     fh->first_cluster = comp_cluster;
     fh->parent_cluster = last_parent;
@@ -553,11 +599,14 @@ static void f32_vfs_close(vfs_mount *m, vfs_file *f) {
 static int f32_vfs_read(vfs_mount *m, vfs_file *f, uint64_t offset,
                         uint64_t size, void *buf, uint64_t *got) {
     fat32_fs *fs = (fat32_fs *)m->fs_data;
-    if (f->type != VFS_TYPE_FILE || f->fs_handle == NULL) {
-        return -1;
+    if (f == NULL || buf == NULL || got == NULL) return VFS_ERR_INVALID;
+    *got = 0;
+    if (f->type != VFS_TYPE_FILE) return VFS_ERR_IS_DIRECTORY;
+    if (f->fs_handle == NULL || fs == NULL) {
+        return VFS_ERR_INVALID;
     }
-    if (size == 0) { *got = 0; return 0; }
-    if (offset >= f->size) { *got = 0; return 0; }
+    if (size == 0) return 0;
+    if (offset >= f->size) return 0;
 
     /* Don't read past the end of the file — the last cluster may have
      * junk bytes in it beyond the real size. */
@@ -576,7 +625,7 @@ static int f32_vfs_read(vfs_mount *m, vfs_file *f, uint64_t offset,
     while (remaining > 0 && cl >= 2 && cl < F32_EOC && guard++ < (1 << 20)) {
         uint32_t csize = fs->cluster_bytes;
         if (csize > sizeof(cbuf)) {
-            csize = sizeof(cbuf);
+            return VFS_ERR_OPERATION;
         }
         if (f32_read_cluster(fs, cl, cbuf) != 0) {
             break;
@@ -600,28 +649,27 @@ static int f32_vfs_read(vfs_mount *m, vfs_file *f, uint64_t offset,
     }
 
     *got = size - remaining;
-    return 0;
+    return remaining == 0U ? 0 : VFS_ERR_IO;
 }
 
 /* If a write changed the file's cluster or size, write that back to the
  * directory entry on disk so it isn't lost. */
-static void f32_sync_dirent(fat32_fs *fs, fat32_fhandle *fh,
-                            uint32_t orig_first, uint32_t orig_size) {
+static int f32_sync_dirent(fat32_fs *fs, fat32_fhandle *fh,
+                           uint32_t orig_first, uint32_t orig_size) {
     if (fh->first_cluster == orig_first && fh->size == orig_size) {
-        return; /* nothing changed */
+        return 0; /* nothing changed */
     }
     uint8_t entry_buf[32];
     if (f32_read_dir_entry(fs, fh->parent_cluster, fh->entry_offset,
-                           entry_buf) != 0) {
-        return;
-    }
+                           entry_buf) != 0) return VFS_ERR_IO;
     if (fh->first_cluster != orig_first) {
         f32_set_entry_cluster(entry_buf, fh->first_cluster);
     }
     if (fh->size != orig_size) {
         f32_set_entry_size(entry_buf, fh->size);
     }
-    f32_write_dir_entry(fs, fh->parent_cluster, fh->entry_offset, entry_buf);
+    return f32_write_dir_entry(fs, fh->parent_cluster, fh->entry_offset,
+                               entry_buf) == 0 ? 0 : VFS_ERR_IO;
 }
 
 /* Writes can extend a file, which means grabbing new clusters from the
@@ -630,11 +678,29 @@ static void f32_sync_dirent(fat32_fs *fs, fat32_fhandle *fh,
 static int f32_vfs_write(vfs_mount *m, vfs_file *f, uint64_t offset,
                          uint64_t size, const void *buf, uint64_t *written) {
     fat32_fs *fs = (fat32_fs *)m->fs_data;
-    if (f->type != VFS_TYPE_FILE || f->fs_handle == NULL) {
-        if (written) *written = 0;
-        return -1;
+    if (f == NULL || written == NULL || (size != 0U && buf == NULL)) {
+        return VFS_ERR_INVALID;
     }
-    if (size == 0) { *written = 0; return 0; }
+    *written = 0;
+    if (f->type != VFS_TYPE_FILE) {
+        return VFS_ERR_IS_DIRECTORY;
+    }
+    if (f->fs_handle == NULL || fs == NULL) {
+        return VFS_ERR_INVALID;
+    }
+    if (fs->dev == NULL || fs->dev->write == NULL) {
+        return VFS_ERR_READ_ONLY;
+    }
+    if (offset > UINT32_MAX || size > UINT32_MAX - offset) {
+        return VFS_ERR_LIMIT;
+    }
+    if (size == 0U) {
+        return 0;
+    }
+    if (fs->cluster_bytes > 4096U) {
+        return VFS_ERR_OPERATION;
+    }
+    if (f->type != VFS_TYPE_FILE || f->fs_handle == NULL) return VFS_ERR_INVALID;
 
     fat32_fhandle *fh = (fat32_fhandle *)f->fs_handle;
     const uint8_t *src = (const uint8_t *)buf;
@@ -707,17 +773,57 @@ static int f32_vfs_write(vfs_mount *m, vfs_file *f, uint64_t offset,
             fh->size = (uint32_t)new_size;
             f->size = new_size;
         }
-        f32_sync_dirent(fs, fh, orig_first, orig_size);
+        if (f32_sync_dirent(fs, fh, orig_first, orig_size) != 0) {
+            return VFS_ERR_IO;
+        }
     }
-    return (*written > 0) ? 0 : -1;
+    return (*written > 0) ? 0 : VFS_ERR_IO;
+}
+
+static int f32_vfs_truncate(vfs_mount *m, vfs_file *f, uint64_t size) {
+    if (m == NULL || f == NULL || f->fs_handle == NULL) {
+        return VFS_ERR_INVALID;
+    }
+    if (f->type != VFS_TYPE_FILE) return VFS_ERR_IS_DIRECTORY;
+    if (size != 0U) return VFS_ERR_LIMIT;
+
+    fat32_fs *fs = (fat32_fs *)m->fs_data;
+    if (fs == NULL || fs->dev == NULL) return VFS_ERR_OPERATION;
+    if (fs->dev->write == NULL) return VFS_ERR_READ_ONLY;
+
+    fat32_fhandle *fh = (fat32_fhandle *)f->fs_handle;
+    uint32_t old_cluster = fh->first_cluster;
+    if (old_cluster < 2U || old_cluster >= F32_EOC) {
+        fh->first_cluster = 0;
+        fh->size = 0;
+        f->size = 0;
+        return 0;
+    }
+
+    uint8_t entry[32];
+    if (f32_read_dir_entry(fs, fh->parent_cluster, fh->entry_offset, entry) != 0) {
+        return VFS_ERR_IO;
+    }
+    f32_set_entry_cluster(entry, 0);
+    f32_set_entry_size(entry, 0);
+    if (f32_write_dir_entry(fs, fh->parent_cluster, fh->entry_offset, entry) != 0) {
+        return VFS_ERR_IO;
+    }
+
+    fh->first_cluster = 0;
+    fh->size = 0;
+    f->size = 0;
+    return f32_free_chain(fs, old_cluster) == 0 ? 0 : VFS_ERR_IO;
 }
 
 static int f32_vfs_readdir(vfs_mount *m, const char *path, int idx,
                            char *name, size_t name_cap, uint32_t *type) {
-    fat32_fs *fs = (fat32_fs *)m->fs_data;
-    if (idx < 0) {
-        return -1;
+    if (m == NULL || path == NULL || name == NULL || name_cap == 0U ||
+        type == NULL || idx < 0) {
+        return VFS_ERR_INVALID;
     }
+    fat32_fs *fs = (fat32_fs *)m->fs_data;
+    if (fs == NULL || !fs->valid) return VFS_ERR_OPERATION;
 
     /* Which directory are we listing? Root, or open the subdirectory. */
     uint32_t dir_cluster = fs->root_cluster;
@@ -725,12 +831,11 @@ static int f32_vfs_readdir(vfs_mount *m, const char *path, int idx,
     while (*p == '/') p++;
     if (*p != '\0') {
         vfs_file dr;
-        if (f32_vfs_open(m, path, &dr) != 0) {
-            return -1;
-        }
+        int rc = f32_vfs_open(m, path, &dr);
+        if (rc != 0) return rc;
         if (dr.type != VFS_TYPE_DIR) {
             vfs_close(&dr);
-            return -1;
+            return VFS_ERR_NOT_DIRECTORY;
         }
         if (dr.fs_handle != NULL) {
             dir_cluster = ((fat32_fhandle *)dr.fs_handle)->first_cluster;
@@ -744,10 +849,12 @@ static int f32_vfs_readdir(vfs_mount *m, const char *path, int idx,
     ctx.target = idx;
     ctx.count = 0;
     ctx.found = 0;
-    f32_walk_dir(fs, dir_cluster, f32_readdir_cb, &ctx);
+    if (f32_walk_dir(fs, dir_cluster, f32_readdir_cb, &ctx) != 0) {
+        return VFS_ERR_IO;
+    }
 
     if (!ctx.found) {
-        return -1; /* index past end */
+        return VFS_READDIR_EOF;
     }
     f32_format_name(ctx.copy, name, name_cap);
     *type = (ctx.copy[0x0B] & ATTR_DIR) ? VFS_TYPE_DIR : VFS_TYPE_FILE;
@@ -757,9 +864,8 @@ static int f32_vfs_readdir(vfs_mount *m, const char *path, int idx,
 static int f32_vfs_stat(vfs_mount *m, const char *path, uint64_t *size,
                         uint32_t *type) {
     vfs_file f;
-    if (f32_vfs_open(m, path, &f) != 0) {
-        return -1;
-    }
+    int rc = f32_vfs_open(m, path, &f);
+    if (rc != 0) return rc;
     *size = f.size;
     *type = f.type;
     vfs_close(&f);
@@ -769,14 +875,16 @@ static int f32_vfs_stat(vfs_mount *m, const char *path, uint64_t *size,
 /* The mutating operations: create, unlink, and mkdir. */
 
 static int f32_vfs_create(vfs_mount *m, const char *path) {
+    if (m == NULL || path == NULL) return VFS_ERR_INVALID;
     fat32_fs *fs = (fat32_fs *)m->fs_data;
+    if (fs == NULL || fs->dev == NULL) return VFS_ERR_OPERATION;
+    if (fs->dev->write == NULL) return VFS_ERR_READ_ONLY;
 
     char filename[13];
     uint32_t parent_cluster;
-    if (f32_resolve_parent(fs, path, &parent_cluster,
-                           filename, sizeof(filename)) != 0) {
-        return -1;
-    }
+    int rc = f32_resolve_parent(fs, path, &parent_cluster,
+                                filename, sizeof(filename));
+    if (rc != 0) return rc;
 
     /* The name must not already exist. */
     char needle[13];
@@ -786,17 +894,18 @@ static int f32_vfs_create(vfs_mount *m, const char *path) {
     find_ctx ctx;
     memcpy(ctx.needle, needle, sizeof(ctx.needle));
     ctx.found = 0;
-    if (f32_walk_dir(fs, parent_cluster, f32_find_cb, &ctx) != 0) return -1;
-    if (ctx.found) return -1;
+    if (f32_walk_dir(fs, parent_cluster, f32_find_cb, &ctx) != 0) return VFS_ERR_IO;
+    if (ctx.found) return VFS_ERR_EXISTS;
 
     /* Find a slot in the parent, or grow the directory if it's full. */
     uint32_t slot_off = 0;
     uint32_t prev_cl = 0;
     int r = f32_find_free_slot(fs, parent_cluster, &slot_off, &prev_cl);
     if (r == 0) {
-        if (f32_grow_dir(fs, prev_cl, &slot_off) != 0) return -1;
+        rc = f32_grow_dir(fs, prev_cl, &slot_off);
+        if (rc != 0) return rc;
     } else if (r < 0) {
-        return -1;
+        return VFS_ERR_IO;
     }
 
     /* A brand-new file starts out as just a directory entry, no data. */
@@ -805,18 +914,21 @@ static int f32_vfs_create(vfs_mount *m, const char *path) {
     f32_to_83(filename, entry);
     entry[0x0B] = 0x20;                       /* archive attribute */
 
-    return f32_write_dir_entry(fs, parent_cluster, slot_off, entry);
+    return f32_write_dir_entry(fs, parent_cluster, slot_off, entry) == 0
+               ? 0 : VFS_ERR_IO;
 }
 
 static int f32_vfs_unlink(vfs_mount *m, const char *path) {
+    if (m == NULL || path == NULL) return VFS_ERR_INVALID;
     fat32_fs *fs = (fat32_fs *)m->fs_data;
+    if (fs == NULL || fs->dev == NULL) return VFS_ERR_OPERATION;
+    if (fs->dev->write == NULL) return VFS_ERR_READ_ONLY;
 
     char filename[13];
     uint32_t parent_cluster;
-    if (f32_resolve_parent(fs, path, &parent_cluster,
-                           filename, sizeof(filename)) != 0) {
-        return -1;
-    }
+    int rc = f32_resolve_parent(fs, path, &parent_cluster,
+                                filename, sizeof(filename));
+    if (rc != 0) return rc;
 
     char needle[13];
     memcpy(needle, filename, sizeof(needle));
@@ -825,35 +937,39 @@ static int f32_vfs_unlink(vfs_mount *m, const char *path) {
     find_ctx ctx;
     memcpy(ctx.needle, needle, sizeof(ctx.needle));
     ctx.found = 0;
-    if (f32_walk_dir(fs, parent_cluster, f32_find_cb, &ctx) != 0) return -1;
-    if (!ctx.found) return -1;                /* no such file */
+    if (f32_walk_dir(fs, parent_cluster, f32_find_cb, &ctx) != 0) return VFS_ERR_IO;
+    if (!ctx.found) return VFS_ERR_NOT_FOUND;
 
     if (ctx.found_entry[0x0B] & ATTR_DIR) {
-        return -1;                            /* can't rm a directory */
+        return VFS_ERR_IS_DIRECTORY;
     }
 
-    /* Free its data clusters first, then remove the directory entry. */
     uint32_t first_cl = f32_entry_cluster(ctx.found_entry);
-    if (first_cl >= 2 && first_cl < F32_EOC) {
-        f32_free_chain(fs, first_cl);
-    }
-
     uint8_t entry_buf[32];
     memcpy(entry_buf, ctx.found_entry, 32);
     entry_buf[0] = 0xE5;                      /* the "deleted" marker */
-    return f32_write_dir_entry(fs, ctx.parent_cluster,
-                               ctx.entry_offset, entry_buf);
+    if (f32_write_dir_entry(fs, ctx.parent_cluster,
+                            ctx.entry_offset, entry_buf) != 0) {
+        return VFS_ERR_IO;
+    }
+    if (first_cl >= 2 && first_cl < F32_EOC &&
+        f32_free_chain(fs, first_cl) != 0) {
+        return VFS_ERR_IO;
+    }
+    return 0;
 }
 
 static int f32_vfs_mkdir(vfs_mount *m, const char *path) {
+    if (m == NULL || path == NULL) return VFS_ERR_INVALID;
     fat32_fs *fs = (fat32_fs *)m->fs_data;
+    if (fs == NULL || fs->dev == NULL) return VFS_ERR_OPERATION;
+    if (fs->dev->write == NULL) return VFS_ERR_READ_ONLY;
 
     char dirname[13];
     uint32_t parent_cluster;
-    if (f32_resolve_parent(fs, path, &parent_cluster,
-                           dirname, sizeof(dirname)) != 0) {
-        return -1;
-    }
+    int rc = f32_resolve_parent(fs, path, &parent_cluster,
+                                dirname, sizeof(dirname));
+    if (rc != 0) return rc;
 
     char needle[13];
     memcpy(needle, dirname, sizeof(needle));
@@ -862,27 +978,28 @@ static int f32_vfs_mkdir(vfs_mount *m, const char *path) {
     find_ctx ctx;
     memcpy(ctx.needle, needle, sizeof(ctx.needle));
     ctx.found = 0;
-    if (f32_walk_dir(fs, parent_cluster, f32_find_cb, &ctx) != 0) return -1;
-    if (ctx.found) return -1;                 /* already exists */
+    if (f32_walk_dir(fs, parent_cluster, f32_find_cb, &ctx) != 0) return VFS_ERR_IO;
+    if (ctx.found) return VFS_ERR_EXISTS;
 
     /* Room in the parent directory. */
     uint32_t slot_off = 0;
     uint32_t prev_cl = 0;
     int r = f32_find_free_slot(fs, parent_cluster, &slot_off, &prev_cl);
     if (r == 0) {
-        if (f32_grow_dir(fs, prev_cl, &slot_off) != 0) return -1;
+        rc = f32_grow_dir(fs, prev_cl, &slot_off);
+        if (rc != 0) return rc;
     } else if (r < 0) {
-        return -1;
+        return VFS_ERR_IO;
     }
 
     /* Grab a cluster to store the new directory's entries in. */
     uint32_t new_cl = f32_alloc_cluster(fs);
-    if (new_cl == 0) return -1;
+    if (new_cl == 0) return VFS_ERR_NO_SPACE;
 
     uint8_t *dbuf = kmalloc(fs->cluster_bytes);
     if (dbuf == NULL) {
         f32_set_fat_entry(fs, new_cl, 0);
-        return -1;
+        return VFS_ERR_NO_MEMORY;
     }
     memset(dbuf, 0, fs->cluster_bytes);
 
@@ -902,7 +1019,7 @@ static int f32_vfs_mkdir(vfs_mount *m, const char *path) {
     if (f32_write_cluster(fs, new_cl, dbuf) != 0) {
         kfree(dbuf);
         f32_set_fat_entry(fs, new_cl, 0);
-        return -1;
+        return VFS_ERR_IO;
     }
     kfree(dbuf);
 
@@ -914,7 +1031,7 @@ static int f32_vfs_mkdir(vfs_mount *m, const char *path) {
 
     if (f32_write_dir_entry(fs, parent_cluster, slot_off, entry) != 0) {
         f32_set_fat_entry(fs, new_cl, 0);
-        return -1;
+        return VFS_ERR_IO;
     }
     return 0;
 }
@@ -974,6 +1091,7 @@ struct vfs_fs_ops fat32_ops = {
     .close   = f32_vfs_close,
     .read    = f32_vfs_read,
     .write   = f32_vfs_write,
+    .truncate = f32_vfs_truncate,
     .readdir = f32_vfs_readdir,
     .stat    = f32_vfs_stat,
     .create  = f32_vfs_create,

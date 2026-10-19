@@ -96,15 +96,23 @@ vfs_mount *vfs_find_mount(const char *path) {
     return best;
 }
 
+static const char *vfs_relative_path(vfs_mount *mount, const char *path) {
+    size_t mount_len = strlen(mount->path);
+    if (mount_len == 1U) {
+        return path;
+    }
+    return path + mount_len;
+}
+
 int vfs_open(const char *path, vfs_file *out) {
     if (path == NULL || out == NULL) {
-        return -1;
+        return VFS_ERR_INVALID;
     }
     vfs_mount *m = vfs_find_mount(path);
     if (m == NULL || m->ops.open == NULL) {
-        return -1;
+        return VFS_ERR_OPERATION;
     }
-    return m->ops.open(m, path, out);
+    return m->ops.open(m, vfs_relative_path(m, path), out);
 }
 
 void vfs_close(vfs_file *f) {
@@ -123,11 +131,11 @@ void vfs_close(vfs_file *f) {
 int vfs_read(vfs_file *f, uint64_t offset, uint64_t size,
              void *buf, uint64_t *got) {
     if (f == NULL || f->mount == NULL || buf == NULL || got == NULL) {
-        return -1;
+        return VFS_ERR_INVALID;
     }
     vfs_mount *m = (vfs_mount *)f->mount;
     if (m->ops.read == NULL) {
-        return -1;
+        return VFS_ERR_OPERATION;
     }
     return m->ops.read(m, f, offset, size, buf, got);
 }
@@ -135,67 +143,78 @@ int vfs_read(vfs_file *f, uint64_t offset, uint64_t size,
 int vfs_write(vfs_file *f, uint64_t offset, uint64_t size,
               const void *buf, uint64_t *written) {
     if (f == NULL || f->mount == NULL || buf == NULL || written == NULL) {
-        return -1;
+        return VFS_ERR_INVALID;
     }
     vfs_mount *m = (vfs_mount *)f->mount;
     if (m->ops.write == NULL) {
-        return -1;
+        return VFS_ERR_OPERATION;
     }
     return m->ops.write(m, f, offset, size, buf, written);
 }
 
+int vfs_truncate(vfs_file *f, uint64_t size) {
+    if (f == NULL || f->mount == NULL) {
+        return VFS_ERR_INVALID;
+    }
+    vfs_mount *m = (vfs_mount *)f->mount;
+    if (m->ops.truncate == NULL) {
+        return VFS_ERR_OPERATION;
+    }
+    return m->ops.truncate(m, f, size);
+}
+
 int vfs_readdir(const char *path, int idx, char *name,
                 size_t name_cap, uint32_t *type) {
-    if (path == NULL || name == NULL) {
-        return -1;
+    if (path == NULL || name == NULL || name_cap == 0U || type == NULL || idx < 0) {
+        return VFS_ERR_INVALID;
     }
     vfs_mount *m = vfs_find_mount(path);
     if (m == NULL || m->ops.readdir == NULL) {
-        return -1;
+        return VFS_ERR_OPERATION;
     }
-    return m->ops.readdir(m, path, idx, name, name_cap, type);
+    return m->ops.readdir(m, vfs_relative_path(m, path), idx, name, name_cap, type);
 }
 
 int vfs_stat(const char *path, uint64_t *size, uint32_t *type) {
-    if (path == NULL) {
-        return -1;
+    if (path == NULL || size == NULL || type == NULL) {
+        return VFS_ERR_INVALID;
     }
     vfs_mount *m = vfs_find_mount(path);
     if (m == NULL || m->ops.stat == NULL) {
-        return -1;
+        return VFS_ERR_OPERATION;
     }
-    return m->ops.stat(m, path, size, type);
+    return m->ops.stat(m, vfs_relative_path(m, path), size, type);
 }
 
 int vfs_create(const char *path) {
     if (path == NULL) {
-        return -1;
+        return VFS_ERR_INVALID;
     }
     vfs_mount *m = vfs_find_mount(path);
     if (m == NULL || m->ops.create == NULL) {
-        return -1;
+        return VFS_ERR_OPERATION;
     }
-    return m->ops.create(m, path);
+    return m->ops.create(m, vfs_relative_path(m, path));
 }
 
 int vfs_unlink(const char *path) {
     if (path == NULL) {
-        return -1;
+        return VFS_ERR_INVALID;
     }
     vfs_mount *m = vfs_find_mount(path);
     if (m == NULL || m->ops.unlink == NULL) {
-        return -1;
+        return VFS_ERR_OPERATION;
     }
-    return m->ops.unlink(m, path);
+    return m->ops.unlink(m, vfs_relative_path(m, path));
 }
 
 int vfs_mkdir(const char *path) {
     if (path == NULL) {
-        return -1;
+        return VFS_ERR_INVALID;
     }
     vfs_mount *m = vfs_find_mount(path);
     if (m == NULL || m->ops.mkdir == NULL) {
-        return -1;
+        return VFS_ERR_OPERATION;
     }
-    return m->ops.mkdir(m, path);
+    return m->ops.mkdir(m, vfs_relative_path(m, path));
 }

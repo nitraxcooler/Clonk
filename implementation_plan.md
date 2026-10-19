@@ -22,25 +22,54 @@ This is a freestanding C kernel (no libc, no POSIX, no C++ RTTI/exceptions). Its
 The kernel installs its own GDT and 64-bit TSS. Ring 3 uses selectors `0x1b`
 (data) and `0x23` (code), and privilege transitions land on a dedicated ring
 0 stack. IDT vector `0x80` is a DPL-3 interrupt gate. The syscall convention
-is defined in `src/abi/syscall.h`: syscall ID in `RAX`, arguments in `RDI` and
-`RSI`, and signed return value in `RAX`. `write` accepts up to 256 bytes only
-after verifying that all supplied bytes are in present user pages, then writes
-to the framebuffer console and COM1; `exit` returns from `/init`. `read`
-accepts a writable one-byte user buffer, blocks until a queued keyboard
-character is available, stores it, and returns `1`; invalid arguments return
-`-1`. Enter and Backspace are delivered as `\n` and `\b`. The wait enables
-interrupts and uses `hlt`, so it sleeps without a scheduler but only supports
-the single active process. `clear` takes no arguments and clears the framebuffer.
-Unknown syscall IDs and invalid buffers return `-1`.
+is defined in `src/abi/syscall.h`: syscall ID in `RAX`, arguments in `RDI`,
+`RSI`, and `RDX`, and signed return value in `RAX`. The established syscall
+numbers are unchanged: console `WRITE=1`, `EXIT=2`, keyboard `READ=3`, and
+`CLEAR=4`. `WRITE` validates up to 256 bytes and writes to the framebuffer and
+COM1; `READ` validates a writable one-byte user buffer and blocks until a
+queued keyboard character is available; `CLEAR` takes no arguments; `EXIT`
+returns from `/init`. The wait enables interrupts and uses `hlt`, so it sleeps
+without a scheduler and only supports the single active process.
 
-`/init` is a persistent Ring 3 shell with `help`, `echo TEXT`, `clear`,
-`version`, and `exit`. It accepts lines up to 127 characters, supports basic
-Backspace editing, and rejects overlong lines rather than running a truncated
-command. The keyboard interrupt translates and queues keys only. A bounded
-kernel-owned queue is consumed by the userspace read syscall while `/init` is
-active; after exit, queued userspace input is discarded and the kernel shell
-resumes consuming new keys. The kernel shell retains its existing commands,
-with line editing and command dispatch deferred outside the keyboard IRQ.
+The added filesystem ABI uses IDs `FS_OPEN=5`, `FS_READ=6`, `FS_WRITE=7`,
+`FS_READDIR=8`, `FS_CLOSE=9`, `FS_MKDIR=10`, and `FS_UNLINK=11`. It exposes
+opaque descriptors and bounded operations only; kernel-owned VFS objects and
+pointers never cross the boundary. `FS_READ` and `FS_WRITE` transfer at most
+512 bytes per call; reads return zero at EOF, and directory iteration returns
+one entry or zero at end. Open flags distinguish read, write, create, and
+explicit truncation. Negative error codes are defined in the shared ABI header
+for invalid buffers/arguments, paths, missing paths, type mismatches, existing
+paths, read-only storage, memory/space exhaustion, invalid handles, limits,
+I/O, and unsupported operations.
+
+`src/kernel/userfs.c` owns a fixed 16-slot descriptor table. Descriptors are
+positive integers from 1 through 16, allocated from the first free slot;
+invalid and repeated closes fail, and all open objects are closed on process
+exit or user exception. `src/kernel/usercopy.c` reuses the VMM's per-page
+validation: source buffers must be mapped user pages, destination buffers
+must be writable user pages, including every page spanned by a range. Data is
+copied through bounded kernel buffers, and paths are copied into a 256-byte
+kernel buffer before VFS calls. Paths must be NUL-terminated within that
+bound, are normalized relative to `/`, and reject `.`/`..`, empty names,
+non-8.3 FAT names, and unsupported characters. Repeated separators are
+collapsed. The single-process model prevents concurrent address-space changes
+during validation and copying.
+
+`/init` preserves `help`, `echo`, `clear`, `version`, and `exit`, and adds
+`ls [PATH]`, `cat PATH`, `touch PATH`, `write PATH TEXT`, `rm PATH`, and
+`mkdir PATH`. `ls` defaults to `/`; `touch` creates a missing file without
+truncating an existing one; `write` creates if needed, explicitly truncates,
+then writes the remaining text while preserving spaces within it; `rm`
+removes files but rejects directories; `mkdir` requires an existing parent.
+The line buffer allows at most 511 characters. All commands use the syscall
+interface and mounted VFS rather than filesystem backend internals.
+
+The FAT32 root comes from the `ramdisk0` Limine module in the standard boot
+image (with device fallbacks during initialization). It is writable in memory
+but volatile: filesystem modifications do not survive reboot. The AHCI block
+path is read-only. The backend accepts 8.3 names, has a 32-bit file-size
+limit, and provides neither long filenames nor permissions. The syscall ABI
+does not yet expose metadata, seek, rename, or directory removal.
 
 The ELF loader checks ELF64/little-endian/x86-64 `ET_EXEC` headers, program
 header bounds, file/memory sizes, alignment, user virtual-address bounds, and
@@ -60,18 +89,27 @@ exit. User exceptions terminate `/init` instead of entering the kernel panic
 handler.
 
 `src/userspace/init.c` is linked as a static ELF and bundled as a Limine
-module. Boot initializes the kernel heap, creates the RAM disk, initializes
-the VFS, and mounts the FAT32 module at `/` before starting `/init`. QEMU
-keyboard tests verified the userspace prompt, built-ins, empty input,
-Backspace correction, oversized-command rejection, and `exit` back to the
-kernel shell. There is no scheduler, general process creation, dynamic linking,
-arguments, libc, or userspace filesystem access. NX
-protection is enabled when supported by the CPU; processors without NX cannot
-enforce non-executable data pages. QEMU regression runs passed; physical
-hardware has not been tested. The older planning sections below document
-other subsystems and long-term work and do not override this current-state
-summary.
-Boot initialization also makes the shell's VFS-backed file commands available.
+module. The kernel initializes the heap, block devices, VFS, and FAT32 root
+mount before starting `/init`. Boot-time ELF and syscall self-tests cover
+malformed ELF input, permissions, guard placement, address-space cleanup,
+invalid and cross-page user pointers, read-only destinations, invalid
+descriptors, transfer/path limits, and descriptor exhaustion. QEMU command
+tests verified filesystem create/list/write/read/remove, empty files and
+directories, explicit truncation, error cases, oversized-path rejection, and
+the exit handoff marker. A 300-byte file was read across bounded chunks, and
+the kernel shell read back a file written by `/init` after the userspace exit.
+The kernel-shell `selftest` command passed PMM, VMM, and heap checks; the
+`panic` and `pfault` commands also emitted their expected QEMU serial
+diagnostics. These checks do not constitute exhaustive security testing. A
+test-only `MYOS_TEST_SUPERVISOR_FAULT` build previously exercised termination
+on a user access to supervisor memory; normal builds do not trigger it.
+
+There is no scheduler, general process creation, dynamic linker, argv/env
+setup, libc, seek, or general filesystem descriptor API. NX protection is
+enabled when supported by the CPU; processors without NX cannot enforce
+non-executable data pages. Physical hardware has not been tested. The older
+planning sections below describe other subsystems and future work; this
+current-state summary takes precedence where they disagree.
 
 ## High-level approach
 
@@ -366,7 +404,16 @@ Self-test functions panic on failure, consistent with the existing `pmm_self_tes
 | Path | Change |
 | ---- | ------ |
 | `GNUmakefile` | add new `.c` sources to `C_SOURCES`; add `fat32img` target to regenerate the embedded image |
+| `src/abi/syscall.h` | preserve syscall IDs 1–4 and define the filesystem ABI, flags, limits, directory entries, and errors |
+| `src/kernel/usercopy.c/.h` | validate user mappings and copy user data through bounded kernel buffers |
+| `src/kernel/userfs.c/.h` | implement VFS-backed filesystem syscalls and the kernel-owned 16-slot descriptor table |
+| `src/kernel/usermode.c` | dispatch filesystem syscalls and close handles during userspace teardown |
+| `src/kernel/vmm.c/.h` | validate user-writable ranges across every page-table level |
+| `src/fs/vfs.c/.h` | provide truncate/EOF/error semantics and mount-relative path dispatch |
+| `src/fs/fat32.c` | implement the required truncate, directory iteration, and file/directory operations |
+| `src/userspace/init.c` | add bounded filesystem shell commands and syscall boundary self-tests |
 | `src/kernel/main.c` | call `heap_init()` after `vm_init()`; auto-run `heap_self_test()`; register new CLI commands |
+| `README.md`, `implementation_plan.md` | document the implemented syscall ABI, commands, limits, storage model, and remaining work |
 | `src/kernel/panic.h` | add `cpu_reg_frame` + `pf_decode`; extend `kernel_panic_page_fault` signature |
 | `src/kernel/panic.c` | decode error-code bits; render Present/Write/User/Instruction/Reserved + register columns on page-fault screen |
 | `src/arch/x86_64/idt.c` | build `cpu_reg_frame` from saved ISR registers (`stack[0..14]`), keep CR2 read, pass frame to `kernel_panic_page_fault` |
