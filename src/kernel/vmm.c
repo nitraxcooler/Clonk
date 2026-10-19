@@ -8,6 +8,7 @@
 #include "kernel/panic.h"
 #include "kernel/pmm.h"
 #include "arch/x86_64/io.h"
+#include "arch/x86_64/gdt.h"
 
 /* Serial helpers so VMM progress is visible in the boot log. */
 static inline void vmm_serial_putc(char c) { outb(0x3F8, (uint8_t)c); }
@@ -26,6 +27,8 @@ static void vmm_serial_hex64(uint64_t v) {
 
 extern uint8_t __kernel_start[];
 extern uint8_t __kernel_end[];
+extern uint8_t __kernel_text_start[];
+extern uint8_t __kernel_text_end[];
 
 extern volatile struct limine_hhdm_request limine_hhdm_request;
 extern volatile struct limine_memmap_request limine_memmap_request;
@@ -68,29 +71,39 @@ static bool vmm_is_page_aligned(uint64_t address) {
 /* Get the next-level page table for an entry, allocating a fresh one
  * from the PMM if it doesn't exist yet. Returns NULL if the entry is a
  * huge page, since you can't descend into a huge page. */
-static uint64_t *vmm_get_or_create_table(uint64_t *parent_table, uint64_t index) {
+static uint64_t *vmm_get_or_create_table(uint64_t *parent_table, uint64_t index,
+                                         uint64_t *created_physical) {
+    *created_physical = 0;
     uint64_t entry = parent_table[index];
 
     if ((entry & VMM_PAGE_PRESENT) != 0U) {
         if ((entry & VMM_PAGE_LARGE) != 0U) {
             return NULL; /* it's a huge page — nothing to descend into */
         }
-        return (uint64_t *)vmm_phys_to_virt(entry & ~0xFFFULL);
+        return (uint64_t *)vmm_phys_to_virt(entry & VMM_PAGE_ADDRESS_MASK);
     }
 
     uint64_t physical_address = pmm_alloc_page();
     if (physical_address == 0U) {
-        kernel_panic("PAGE_TABLE_ALLOC_FAILED");
-    }
-    if (!vmm_is_page_aligned(physical_address)) {
-        kernel_panic("PAGE_TABLE_NOT_ALIGNED");
+        return NULL;
     }
 
     uint64_t *table = (uint64_t *)vmm_phys_to_virt(physical_address);
     vmm_zero_memory((uint8_t *)table, VMM_PAGE_SIZE);
     parent_table[index] = physical_address | VMM_PAGE_PRESENT | VMM_PAGE_WRITABLE;
     ++vmm_page_table_count;
+    *created_physical = physical_address;
     return table;
+}
+
+static void vmm_rollback_tables(uint64_t **entries, const uint64_t *physical_pages,
+                                size_t count) {
+    while (count > 0U) {
+        --count;
+        *entries[count] = 0;
+        pmm_free_page(physical_pages[count]);
+        --vmm_page_table_count;
+    }
 }
 
 /* Walk the whole page-table tree and count mapped pages and page-table
@@ -112,7 +125,7 @@ static void vmm_recount(void) {
             continue;
         }
 
-        uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(pml4_entry & ~0xFFFULL);
+        uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(pml4_entry & VMM_PAGE_ADDRESS_MASK);
         ++vmm_page_table_count;
 
         for (uint64_t j = 0; j < PAGE_TABLE_ENTRIES; ++j) {
@@ -127,7 +140,7 @@ static void vmm_recount(void) {
                 continue;
             }
 
-            uint64_t *pd = (uint64_t *)vmm_phys_to_virt(pdpt_entry & ~0xFFFULL);
+            uint64_t *pd = (uint64_t *)vmm_phys_to_virt(pdpt_entry & VMM_PAGE_ADDRESS_MASK);
             ++vmm_page_table_count;
 
             for (uint64_t k = 0; k < PAGE_TABLE_ENTRIES; ++k) {
@@ -142,7 +155,7 @@ static void vmm_recount(void) {
                     continue;
                 }
 
-                uint64_t *pt = (uint64_t *)vmm_phys_to_virt(pd_entry & ~0xFFFULL);
+                uint64_t *pt = (uint64_t *)vmm_phys_to_virt(pd_entry & VMM_PAGE_ADDRESS_MASK);
                 ++vmm_page_table_count;
 
                 for (uint64_t l = 0; l < PAGE_TABLE_ENTRIES; ++l) {
@@ -158,14 +171,17 @@ static void vmm_recount(void) {
 uint64_t vm_create_address_space(void) {
     uint64_t pml4_physical = pmm_alloc_page();
     if (pml4_physical == 0U) {
-        kernel_panic("PAGE_TABLE_ALLOC_FAILED");
-    }
-    if (!vmm_is_page_aligned(pml4_physical)) {
-        kernel_panic("PAGE_TABLE_NOT_ALIGNED");
+        return 0;
     }
 
     uint64_t *pml4 = (uint64_t *)vmm_phys_to_virt(pml4_physical);
     vmm_zero_memory((uint8_t *)pml4, VMM_PAGE_SIZE);
+    if (vmm_active_pml4 != 0U) {
+        uint64_t *kernel_pml4 = (uint64_t *)vmm_phys_to_virt(vmm_active_pml4);
+        for (size_t i = 256; i < PAGE_TABLE_ENTRIES; ++i) {
+            pml4[i] = kernel_pml4[i] & ~VMM_PAGE_USER;
+        }
+    }
     return pml4_physical;
 }
 
@@ -195,8 +211,38 @@ bool vm_is_initialized(void) {
     return vmm_initialized;
 }
 
+static void vmm_make_kernel_text_executable(uint64_t pml4_physical_address) {
+    uint64_t start = (uint64_t)(uintptr_t)__kernel_text_start & ~0xFFFULL;
+    uint64_t end = ((uint64_t)(uintptr_t)__kernel_text_end + 0xFFFULL) & ~0xFFFULL;
+    for (uint64_t address = start; address < end; address += VMM_PAGE_SIZE) {
+        uint64_t *pml4 = (uint64_t *)vmm_phys_to_virt(pml4_physical_address);
+        uint64_t *pml4_entry = &pml4[(address >> 39) & 0x1FFU];
+        if ((*pml4_entry & VMM_PAGE_PRESENT) == 0U) kernel_panic("KERNEL_TEXT_UNMAPPED");
+        *pml4_entry &= ~VMM_PAGE_NX;
+        uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(*pml4_entry & VMM_PAGE_ADDRESS_MASK);
+        uint64_t *pdpt_entry = &pdpt[(address >> 30) & 0x1FFU];
+        if ((*pdpt_entry & VMM_PAGE_PRESENT) == 0U) kernel_panic("KERNEL_TEXT_UNMAPPED");
+        *pdpt_entry &= ~VMM_PAGE_NX;
+        if ((*pdpt_entry & VMM_PAGE_LARGE) != 0U) continue;
+        uint64_t *pd = (uint64_t *)vmm_phys_to_virt(*pdpt_entry & VMM_PAGE_ADDRESS_MASK);
+        uint64_t *pd_entry = &pd[(address >> 21) & 0x1FFU];
+        if ((*pd_entry & VMM_PAGE_PRESENT) == 0U) kernel_panic("KERNEL_TEXT_UNMAPPED");
+        *pd_entry &= ~VMM_PAGE_NX;
+        if ((*pd_entry & VMM_PAGE_LARGE) != 0U) continue;
+        uint64_t *pt = (uint64_t *)vmm_phys_to_virt(*pd_entry & VMM_PAGE_ADDRESS_MASK);
+        uint64_t *pt_entry = &pt[(address >> 12) & 0x1FFU];
+        if ((*pt_entry & VMM_PAGE_PRESENT) == 0U) kernel_panic("KERNEL_TEXT_UNMAPPED");
+        *pt_entry &= ~VMM_PAGE_NX;
+    }
+}
+
 bool vm_map_page(uint64_t virtual_address, uint64_t physical_address, uint64_t flags) {
-    if (vmm_active_pml4 == 0U) {
+    return vm_map_page_in(vmm_active_pml4, virtual_address, physical_address, flags);
+}
+
+bool vm_map_page_in(uint64_t pml4_physical_address, uint64_t virtual_address,
+                    uint64_t physical_address, uint64_t flags) {
+    if (pml4_physical_address == 0U) {
         return false;
     }
     if (!vmm_is_page_aligned(virtual_address) || !vmm_is_page_aligned(physical_address)) {
@@ -205,34 +251,65 @@ bool vm_map_page(uint64_t virtual_address, uint64_t physical_address, uint64_t f
     if (!vmm_is_canonical(virtual_address)) {
         return false;
     }
+    bool user = (flags & VMM_PAGE_USER) != 0U;
+    if (user && (virtual_address >= 0x0000800000000000ULL ||
+                 ((virtual_address >> 39) & 0x1FFU) >= 256U)) {
+        return false;
+    }
 
-    uint64_t *pml4 = (uint64_t *)vmm_phys_to_virt(vmm_active_pml4);
+    uint64_t *pml4 = (uint64_t *)vmm_phys_to_virt(pml4_physical_address);
     uint64_t pml4_index = (virtual_address >> 39) & 0x1FFU;
     uint64_t pdpt_index = (virtual_address >> 30) & 0x1FFU;
     uint64_t pd_index   = (virtual_address >> 21) & 0x1FFU;
     uint64_t pt_index   = (virtual_address >> 12) & 0x1FFU;
 
-    uint64_t *pdpt = vmm_get_or_create_table(pml4, pml4_index);
+    uint64_t *created_entries[3];
+    uint64_t created_pages[3];
+    size_t created_count = 0;
+    uint64_t created_page = 0;
+    uint64_t *pdpt = vmm_get_or_create_table(pml4, pml4_index, &created_page);
     if (pdpt == NULL) {
         return false;
     }
-    uint64_t *pd = vmm_get_or_create_table(pdpt, pdpt_index);
+    if (created_page != 0U) {
+        created_entries[created_count] = &pml4[pml4_index];
+        created_pages[created_count++] = created_page;
+    }
+    uint64_t *pd = vmm_get_or_create_table(pdpt, pdpt_index, &created_page);
     if (pd == NULL) {
+        vmm_rollback_tables(created_entries, created_pages, created_count);
         return false;
     }
-    uint64_t *pt = vmm_get_or_create_table(pd, pd_index);
+    if (created_page != 0U) {
+        created_entries[created_count] = &pdpt[pdpt_index];
+        created_pages[created_count++] = created_page;
+    }
+    uint64_t *pt = vmm_get_or_create_table(pd, pd_index, &created_page);
     if (pt == NULL) {
+        vmm_rollback_tables(created_entries, created_pages, created_count);
         return false;
+    }
+    if (created_page != 0U) {
+        created_entries[created_count] = &pd[pd_index];
+        created_pages[created_count++] = created_page;
     }
 
     /* Don't silently overwrite a mapping that's already there. */
     if ((pt[pt_index] & VMM_PAGE_PRESENT) != 0U) {
+        vmm_rollback_tables(created_entries, created_pages, created_count);
         return false;
     }
 
-    pt[pt_index] = (physical_address & ~0xFFFULL) | flags | VMM_PAGE_PRESENT;
+    if (user) {
+        pml4[pml4_index] |= VMM_PAGE_USER | VMM_PAGE_WRITABLE;
+        pdpt[pdpt_index] |= VMM_PAGE_USER | VMM_PAGE_WRITABLE;
+        pd[pd_index] |= VMM_PAGE_USER | VMM_PAGE_WRITABLE;
+    }
+    pt[pt_index] = (physical_address & VMM_PAGE_ADDRESS_MASK) | flags | VMM_PAGE_PRESENT;
     ++vmm_mapped_pages;
-    __asm__ volatile ("invlpg (%0)" : : "r"(virtual_address) : "memory");
+    if (pml4_physical_address == vmm_active_pml4) {
+        __asm__ volatile ("invlpg (%0)" : : "r"(virtual_address) : "memory");
+    }
     return true;
 }
 
@@ -254,7 +331,7 @@ bool vm_unmap_page(uint64_t virtual_address) {
         return false;
     }
 
-    uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(pml4[pml4_index] & ~0xFFFULL);
+    uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(pml4[pml4_index] & VMM_PAGE_ADDRESS_MASK);
     if ((pdpt[pdpt_index] & VMM_PAGE_PRESENT) == 0U) {
         return false;
     }
@@ -263,7 +340,7 @@ bool vm_unmap_page(uint64_t virtual_address) {
         return false;
     }
 
-    uint64_t *pd = (uint64_t *)vmm_phys_to_virt(pdpt[pdpt_index] & ~0xFFFULL);
+    uint64_t *pd = (uint64_t *)vmm_phys_to_virt(pdpt[pdpt_index] & VMM_PAGE_ADDRESS_MASK);
     if ((pd[pd_index] & VMM_PAGE_PRESENT) == 0U) {
         return false;
     }
@@ -271,7 +348,7 @@ bool vm_unmap_page(uint64_t virtual_address) {
         return false;
     }
 
-    uint64_t *pt = (uint64_t *)vmm_phys_to_virt(pd[pd_index] & ~0xFFFULL);
+    uint64_t *pt = (uint64_t *)vmm_phys_to_virt(pd[pd_index] & VMM_PAGE_ADDRESS_MASK);
     if ((pt[pt_index] & VMM_PAGE_PRESENT) == 0U) {
         return false;
     }
@@ -283,14 +360,19 @@ bool vm_unmap_page(uint64_t virtual_address) {
 }
 
 bool vm_get_physical(uint64_t virtual_address, uint64_t *physical_address) {
-    if (physical_address == NULL || vmm_active_pml4 == 0U) {
+    return vm_get_physical_in(vmm_active_pml4, virtual_address, physical_address);
+}
+
+bool vm_get_physical_in(uint64_t pml4_physical_address, uint64_t virtual_address,
+                        uint64_t *physical_address) {
+    if (physical_address == NULL || pml4_physical_address == 0U) {
         return false;
     }
     if (!vmm_is_canonical(virtual_address)) {
         return false;
     }
 
-    uint64_t *pml4 = (uint64_t *)vmm_phys_to_virt(vmm_active_pml4);
+    uint64_t *pml4 = (uint64_t *)vmm_phys_to_virt(pml4_physical_address);
     uint64_t pml4_index = (virtual_address >> 39) & 0x1FFU;
     uint64_t pdpt_index = (virtual_address >> 30) & 0x1FFU;
     uint64_t pd_index   = (virtual_address >> 21) & 0x1FFU;
@@ -300,30 +382,127 @@ bool vm_get_physical(uint64_t virtual_address, uint64_t *physical_address) {
         return false;
     }
 
-    uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(pml4[pml4_index] & ~0xFFFULL);
+    uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(pml4[pml4_index] & VMM_PAGE_ADDRESS_MASK);
     if ((pdpt[pdpt_index] & VMM_PAGE_PRESENT) == 0U) {
         return false;
     }
     if ((pdpt[pdpt_index] & VMM_PAGE_LARGE) != 0U) {
-        *physical_address = (pdpt[pdpt_index] & ~0x3FFFFFFFULL) | (virtual_address & 0x3FFFFFFFULL);
+        *physical_address = (pdpt[pdpt_index] & 0x000FFFFFC0000000ULL) |
+                            (virtual_address & 0x3FFFFFFFULL);
         return true; /* 1 GiB page */
     }
 
-    uint64_t *pd = (uint64_t *)vmm_phys_to_virt(pdpt[pdpt_index] & ~0xFFFULL);
+    uint64_t *pd = (uint64_t *)vmm_phys_to_virt(pdpt[pdpt_index] & VMM_PAGE_ADDRESS_MASK);
     if ((pd[pd_index] & VMM_PAGE_PRESENT) == 0U) {
         return false;
     }
     if ((pd[pd_index] & VMM_PAGE_LARGE) != 0U) {
-        *physical_address = (pd[pd_index] & ~0x1FFFFFULL) | (virtual_address & 0x1FFFFFULL);
+        *physical_address = (pd[pd_index] & 0x000FFFFFFFE00000ULL) |
+                            (virtual_address & 0x1FFFFFULL);
         return true; /* 2 MiB page */
     }
 
-    uint64_t *pt = (uint64_t *)vmm_phys_to_virt(pd[pd_index] & ~0xFFFULL);
+    uint64_t *pt = (uint64_t *)vmm_phys_to_virt(pd[pd_index] & VMM_PAGE_ADDRESS_MASK);
     if ((pt[pt_index] & VMM_PAGE_PRESENT) == 0U) {
         return false;
     }
 
-    *physical_address = (pt[pt_index] & ~0xFFFULL) | (virtual_address & 0xFFFU);
+    *physical_address = (pt[pt_index] & VMM_PAGE_ADDRESS_MASK) |
+                        (virtual_address & 0xFFFU);
+    return true;
+}
+
+bool vm_get_page_flags_in(uint64_t pml4_physical_address, uint64_t virtual_address,
+                          uint64_t *flags) {
+    if (flags == NULL || pml4_physical_address == 0U ||
+        !vmm_is_canonical(virtual_address)) return false;
+
+    uint64_t *pml4 = (uint64_t *)vmm_phys_to_virt(pml4_physical_address);
+    uint64_t entry = pml4[(virtual_address >> 39) & 0x1FFU];
+    if ((entry & VMM_PAGE_PRESENT) == 0U) return false;
+    uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(entry & VMM_PAGE_ADDRESS_MASK);
+
+    entry = pdpt[(virtual_address >> 30) & 0x1FFU];
+    if ((entry & VMM_PAGE_PRESENT) == 0U || (entry & VMM_PAGE_LARGE) != 0U) return false;
+    uint64_t *pd = (uint64_t *)vmm_phys_to_virt(entry & VMM_PAGE_ADDRESS_MASK);
+
+    entry = pd[(virtual_address >> 21) & 0x1FFU];
+    if ((entry & VMM_PAGE_PRESENT) == 0U || (entry & VMM_PAGE_LARGE) != 0U) return false;
+    uint64_t *pt = (uint64_t *)vmm_phys_to_virt(entry & VMM_PAGE_ADDRESS_MASK);
+
+    entry = pt[(virtual_address >> 12) & 0x1FFU];
+    if ((entry & VMM_PAGE_PRESENT) == 0U) return false;
+    *flags = entry & (0xFFFULL | VMM_PAGE_NX);
+    return true;
+}
+
+static bool vm_user_page_mapped(uint64_t pml4_physical_address, uint64_t address) {
+    uint64_t *pml4 = (uint64_t *)vmm_phys_to_virt(pml4_physical_address);
+    uint64_t pml4_entry = pml4[(address >> 39) & 0x1FFU];
+    if ((pml4_entry & (VMM_PAGE_PRESENT | VMM_PAGE_USER)) !=
+        (VMM_PAGE_PRESENT | VMM_PAGE_USER)) return false;
+    uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(pml4_entry & VMM_PAGE_ADDRESS_MASK);
+    uint64_t pdpt_entry = pdpt[(address >> 30) & 0x1FFU];
+    if ((pdpt_entry & (VMM_PAGE_PRESENT | VMM_PAGE_USER)) !=
+        (VMM_PAGE_PRESENT | VMM_PAGE_USER) || (pdpt_entry & VMM_PAGE_LARGE)) return false;
+    uint64_t *pd = (uint64_t *)vmm_phys_to_virt(pdpt_entry & VMM_PAGE_ADDRESS_MASK);
+    uint64_t pd_entry = pd[(address >> 21) & 0x1FFU];
+    if ((pd_entry & (VMM_PAGE_PRESENT | VMM_PAGE_USER)) !=
+        (VMM_PAGE_PRESENT | VMM_PAGE_USER) || (pd_entry & VMM_PAGE_LARGE)) return false;
+    uint64_t *pt = (uint64_t *)vmm_phys_to_virt(pd_entry & VMM_PAGE_ADDRESS_MASK);
+    uint64_t pt_entry = pt[(address >> 12) & 0x1FFU];
+    return (pt_entry & (VMM_PAGE_PRESENT | VMM_PAGE_USER)) ==
+           (VMM_PAGE_PRESENT | VMM_PAGE_USER);
+}
+
+bool vm_user_range_valid(uint64_t pml4_physical_address, uint64_t address, uint64_t length) {
+    const uint64_t user_limit = 0x0000800000000000ULL;
+    if (pml4_physical_address == 0U || address >= user_limit ||
+        length > user_limit - address) return false;
+    if (length == 0U) return true;
+    uint64_t last = address + length - 1U;
+    for (uint64_t page = address & ~0xFFFULL; page <= (last & ~0xFFFULL); page += VMM_PAGE_SIZE) {
+        if (!vm_user_page_mapped(pml4_physical_address, page)) return false;
+        if (page > UINT64_MAX - VMM_PAGE_SIZE) return false;
+    }
+    return true;
+}
+
+static bool vm_destroy_lower_table(uint64_t physical_address, unsigned int level) {
+    uint64_t *table = (uint64_t *)vmm_phys_to_virt(physical_address);
+    for (size_t i = 0; i < PAGE_TABLE_ENTRIES; ++i) {
+        uint64_t entry = table[i];
+        if ((entry & VMM_PAGE_PRESENT) == 0U) continue;
+        if (level > 1U) {
+            if ((entry & VMM_PAGE_LARGE) != 0U) return false;
+            uint64_t child = entry & VMM_PAGE_ADDRESS_MASK;
+            if (!vm_destroy_lower_table(child, level - 1U)) return false;
+            pmm_free_page(child);
+            --vmm_page_table_count;
+        } else {
+            pmm_free_page(entry & VMM_PAGE_ADDRESS_MASK);
+            --vmm_mapped_pages;
+        }
+        table[i] = 0;
+    }
+    return true;
+}
+
+bool vm_destroy_address_space(uint64_t pml4_physical_address) {
+    if (pml4_physical_address == 0U || pml4_physical_address == vmm_active_pml4 ||
+        !vmm_is_page_aligned(pml4_physical_address)) return false;
+    uint64_t *pml4 = (uint64_t *)vmm_phys_to_virt(pml4_physical_address);
+    for (size_t i = 0; i < 256U; ++i) {
+        uint64_t entry = pml4[i];
+        if ((entry & VMM_PAGE_PRESENT) == 0U) continue;
+        if ((entry & VMM_PAGE_LARGE) != 0U) return false;
+        uint64_t pdpt = entry & VMM_PAGE_ADDRESS_MASK;
+        if (!vm_destroy_lower_table(pdpt, 3U)) return false;
+        pmm_free_page(pdpt);
+        --vmm_page_table_count;
+        pml4[i] = 0;
+    }
+    pmm_free_page(pml4_physical_address);
     return true;
 }
 
@@ -342,7 +521,7 @@ bool vm_is_mapped(uint64_t virtual_address) {
         return false;
     }
 
-    uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(pml4[pml4_index] & ~0xFFFULL);
+    uint64_t *pdpt = (uint64_t *)vmm_phys_to_virt(pml4[pml4_index] & VMM_PAGE_ADDRESS_MASK);
     if ((pdpt[pdpt_index] & VMM_PAGE_PRESENT) == 0U) {
         return false;
     }
@@ -350,7 +529,7 @@ bool vm_is_mapped(uint64_t virtual_address) {
         return true; /* 1 GiB page */
     }
 
-    uint64_t *pd = (uint64_t *)vmm_phys_to_virt(pdpt[pdpt_index] & ~0xFFFULL);
+    uint64_t *pd = (uint64_t *)vmm_phys_to_virt(pdpt[pdpt_index] & VMM_PAGE_ADDRESS_MASK);
     if ((pd[pd_index] & VMM_PAGE_PRESENT) == 0U) {
         return false;
     }
@@ -358,7 +537,7 @@ bool vm_is_mapped(uint64_t virtual_address) {
         return true; /* 2 MiB page */
     }
 
-    uint64_t *pt = (uint64_t *)vmm_phys_to_virt(pd[pd_index] & ~0xFFFULL);
+    uint64_t *pt = (uint64_t *)vmm_phys_to_virt(pd[pd_index] & VMM_PAGE_ADDRESS_MASK);
     return (pt[pt_index] & VMM_PAGE_PRESENT) != 0U;
 }
 
@@ -393,6 +572,9 @@ void vm_init(void) {
      * every mapping the kernel needs (code, HHDM, stack, IDT, framebuffer)
      * survives the switch. After this, CR3 points at our page tables. */
     vmm_active_pml4 = vm_create_address_space();
+    if (vmm_active_pml4 == 0U) {
+        kernel_panic("PAGE_TABLE_ALLOC_FAILED");
+    }
     vmm_serial_write("VMM: our pml4 phys: "); vmm_serial_hex64(vmm_active_pml4);
 
     uint64_t boot_cr3 = 0;
@@ -429,9 +611,12 @@ void vm_init(void) {
         kernel_panic("PAGE_TABLE_STACK_UNMAPPED");
     }
 
+    vmm_make_kernel_text_executable(vmm_active_pml4);
+
     vmm_serial_write("VMM: switching to our address space\n");
     __asm__ volatile ("cli");
     vm_switch_address_space(vmm_active_pml4);
+    arch_enable_nx();
     __asm__ volatile ("sti");
 
     if (vm_get_cr3() != vmm_active_pml4) {
@@ -521,6 +706,50 @@ void vm_self_test(void) {
     if (pmm_get_free_pages() != (free_before_unmap + 1U) ||
         pmm_get_used_pages() != (used_before_unmap - 1U)) {
         kernel_panic("PAGING_SELF_TEST_PMM_DRIFT");
+    }
+
+    uint64_t user_free_before = pmm_get_free_pages();
+    uint64_t user_mapped_before = vmm_mapped_pages;
+    uint64_t user_tables_before = vmm_page_table_count;
+    uint64_t user_space = vm_create_address_space();
+    uint64_t user_page = pmm_alloc_page();
+    if (user_space == 0U || user_page == 0U ||
+        !vm_map_page_in(user_space, 0x00400000ULL, user_page,
+                        VMM_PAGE_USER | VMM_PAGE_WRITABLE)) {
+        if (user_page != 0U) pmm_free_page(user_page);
+        (void)vm_destroy_address_space(user_space);
+        kernel_panic("PAGING_SELF_TEST_USER_MAP_FAILED");
+    }
+    uint64_t *user_pml4 = (uint64_t *)vmm_phys_to_virt(user_space);
+    uint64_t kernel_pml4_index = ((uint64_t)__kernel_start >> 39) & 0x1FFU;
+    if ((user_pml4[kernel_pml4_index] & VMM_PAGE_USER) != 0U ||
+        !vm_user_range_valid(user_space, 0x00400000ULL, 1U) ||
+        vm_user_range_valid(user_space, (uint64_t)__kernel_start, 1U) ||
+        vm_map_page_in(user_space, (uint64_t)__kernel_start, user_page, VMM_PAGE_USER)) {
+        (void)vm_destroy_address_space(user_space);
+        kernel_panic("PAGING_SELF_TEST_USER_ISOLATION_FAILED");
+    }
+    uint64_t supervisor_page = pmm_alloc_page();
+    if (supervisor_page == 0U) {
+        (void)vm_destroy_address_space(user_space);
+        kernel_panic("PAGING_SELF_TEST_SUPERVISOR_PAGE_FAILED");
+    }
+    if (!vm_map_page_in(user_space, 0x00500000ULL, supervisor_page, VMM_PAGE_WRITABLE)) {
+        pmm_free_page(supervisor_page);
+        (void)vm_destroy_address_space(user_space);
+        kernel_panic("PAGING_SELF_TEST_SUPERVISOR_PAGE_FAILED");
+    }
+    if (vm_user_range_valid(user_space, 0x00500000ULL, 1U)) {
+        (void)vm_destroy_address_space(user_space);
+        kernel_panic("PAGING_SELF_TEST_SUPERVISOR_PAGE_FAILED");
+    }
+    if (!vm_destroy_address_space(user_space)) {
+        kernel_panic("PAGING_SELF_TEST_USER_SPACE_DESTROY_FAILED");
+    }
+    if (pmm_get_free_pages() != user_free_before ||
+        vmm_mapped_pages != user_mapped_before ||
+        vmm_page_table_count != user_tables_before) {
+        kernel_panic("PAGING_SELF_TEST_USER_RECLAIM_FAILED");
     }
 
     vmm_serial_write("VMM: self-test passed\n");

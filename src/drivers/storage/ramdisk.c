@@ -62,6 +62,21 @@ static const char *ramdisk_names[] = {
     "ramdisk4", "ramdisk5", "ramdisk6", "ramdisk7"
 };
 
+static int is_userspace_module(const char *path) {
+    if (path == NULL) return 0;
+    while (*path != '\0') {
+        const char *a = path;
+        const char *b = "init.elf";
+        while (*a != '\0' && *b != '\0' && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (*b == '\0') return 1;
+        ++path;
+    }
+    return 0;
+}
+
 /* Scan Limine modules and create a RAM disk for each one. */
 void ramdisk_init(void) {
     if (limine_module_request.response == NULL) {
@@ -81,6 +96,9 @@ void ramdisk_init(void) {
         struct limine_file *file = resp->modules[i];
         if (file == NULL || file->size == 0) {
             rd_write("RAMDISK: module NULL or empty\n");
+            continue;
+        }
+        if (is_userspace_module(file->path) || is_userspace_module(file->string)) {
             continue;
         }
 

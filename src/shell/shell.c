@@ -96,6 +96,23 @@ static const char *tok(int i) {
     return shell_tokens[i];
 }
 
+static bool shell_join_tokens(int first, int count, char *out, size_t out_size) {
+    size_t used = 0;
+    for (int i = first; i < count; ++i) {
+        if (i != first) {
+            if (used + 1 >= out_size) return false;
+            out[used++] = ' ';
+        }
+        size_t len = strlen(tok(i));
+        if (len >= out_size - used) return false;
+        for (size_t j = 0; j < len; ++j) {
+            out[used++] = tok(i)[j];
+        }
+    }
+    out[used] = '\0';
+    return true;
+}
+
 static void cmd_help(void) {
     static const char *lines[] = {
         "  help     - Display this menu",
@@ -215,6 +232,8 @@ static void cmd_badalloc(void) {
     if (p != NULL) {
         kfree(p);
         kprint("ERROR: oversized allocation unexpectedly succeeded.\n", SHELL_COL_ERR);
+    } else {
+        kprint("Allocation failed safely.\n", SHELL_COL_OK);
     }
 }
 
@@ -244,8 +263,15 @@ static void cmd_blkinfo(void) {
 static void cmd_ls(const char *path) {
     char name[VFS_NAME_MAX];
     uint32_t type;
+    uint64_t size;
     int idx = 0;
-    int shown = 0;
+
+    if (vfs_stat(path, &size, &type) != 0 || type != VFS_TYPE_DIR) {
+        kprint("ls: cannot read directory: ", SHELL_COL_ERR);
+        kprint(path, SHELL_COL_ERR);
+        kprint("\n", SHELL_COL_ERR);
+        return;
+    }
 
     while (vfs_readdir(path, idx, name, sizeof(name), &type) == 0) {
         if (type == VFS_TYPE_DIR) {
@@ -255,14 +281,9 @@ static void cmd_ls(const char *path) {
             kprint(name, SHELL_TOK_WHITE);
             kprint("\n", SHELL_TOK_WHITE);
         }
-        shown++;
         idx++;
     }
     if (idx == 0) {
-        kprint("ls: cannot read directory: ", SHELL_COL_ERR);
-        kprint(path, SHELL_COL_ERR);
-        kprint("\n", SHELL_COL_ERR);
-    } else if (!shown) {
         kprint("(empty)\n", SHELL_TOK_WHITE);
     }
 }
@@ -397,10 +418,9 @@ void shell_handle_command(const char *cmdline) {
         kclear();
     } else if (strcmp(cmd, "version") == 0) {
         kprint("MyOS v0.1.1 (x86_64 Long Mode Bare-Metal)\n", SHELL_COL_OK);
-    } else if (strcmp(cmd, "echo") == 0 && n >= 2) {
-        kprint(tok(1), SHELL_TOK_WHITE);
-        for (int i = 2; i < n; ++i) {
-            kprint(" ", SHELL_TOK_WHITE);
+    } else if (strcmp(cmd, "echo") == 0) {
+        for (int i = 1; i < n; ++i) {
+            if (i != 1) kprint(" ", SHELL_TOK_WHITE);
             kprint(tok(i), SHELL_TOK_WHITE);
         }
         kprint("\n", SHELL_TOK_WHITE);
@@ -422,8 +442,29 @@ void shell_handle_command(const char *cmdline) {
         cmd_blkinfo();
     } else if (strcmp(cmd, "ls") == 0) {
         cmd_ls(n >= 2 ? tok(1) : "/");
-    } else if (strcmp(cmd, "cat") == 0 && n >= 2) {
-        cmd_cat(tok(1));
+    } else if (strcmp(cmd, "cat") == 0) {
+        if (n >= 2) cmd_cat(tok(1));
+        else kprint("Usage: cat <path>\n", SHELL_COL_ERR);
+    } else if (strcmp(cmd, "touch") == 0) {
+        if (n >= 2) cmd_touch(tok(1));
+        else kprint("Usage: touch <path>\n", SHELL_COL_ERR);
+    } else if (strcmp(cmd, "write") == 0) {
+        if (n < 3) {
+            kprint("Usage: write <path> <text>\n", SHELL_COL_ERR);
+        } else {
+            char text[SHELL_MAX_TOKENS * SHELL_TOK_LEN];
+            if (!shell_join_tokens(2, n, text, sizeof(text))) {
+                kprint("write: text is too long\n", SHELL_COL_ERR);
+            } else {
+                cmd_write(tok(1), text);
+            }
+        }
+    } else if (strcmp(cmd, "rm") == 0) {
+        if (n >= 2) cmd_rm(tok(1));
+        else kprint("Usage: rm <path>\n", SHELL_COL_ERR);
+    } else if (strcmp(cmd, "mkdir") == 0) {
+        if (n >= 2) cmd_mkdir(tok(1));
+        else kprint("Usage: mkdir <path>\n", SHELL_COL_ERR);
     } else {
         kprint("Unknown command: ", SHELL_COL_ERR);
         kprint(cmd, SHELL_COL_ERR);

@@ -4,9 +4,17 @@
 #include "boot/limine.h"
 #include "graphics/font.h"
 #include "arch/x86_64/idt.h"
+#include "arch/x86_64/gdt.h"
 #include "arch/x86_64/io.h"
 #include "kernel/pmm.h"
 #include "kernel/vmm.h"
+#include "kernel/usermode.h"
+#include "kernel/elf.h"
+#include "kernel/heap.h"
+#include "kernel/blockdev.h"
+#include "fs/vfs.h"
+#include "fs/fat32.h"
+#include "drivers/keyboard/keyboard.h"
 
 /* These helpers write to the serial port (COM1) so we can see what's
  * happening even when there's no screen attached. */
@@ -47,9 +55,12 @@ volatile struct limine_executable_address_request limine_executable_address_requ
 static struct limine_framebuffer *fb;
 static uint32_t cursor_x = 10;
 static uint32_t cursor_y = 10;
+static fat32_fs boot_fat32;
 
 void draw_char(char c, uint32_t x, uint32_t y, uint32_t fg_color, uint32_t bg_color) {
     if ((unsigned char)c > 127) return;
+    if (x > fb->width || fb->width - x < 8 ||
+        y > fb->height || fb->height - y < 16) return;
 
     volatile uint32_t *fb_ptr = (volatile uint32_t *)fb->address;
     uint32_t pitch_pixels = fb->pitch / 4;
@@ -63,16 +74,52 @@ void draw_char(char c, uint32_t x, uint32_t y, uint32_t fg_color, uint32_t bg_co
     }
 }
 
+static void scroll_console(void) {
+    uint32_t pitch_pixels = fb->pitch / 4;
+    volatile uint32_t *pixels = (volatile uint32_t *)fb->address;
+    if (fb->height > 18) {
+        for (uint32_t y = 0; y + 18 < fb->height; ++y) {
+            for (uint32_t x = 0; x < pitch_pixels; ++x) {
+                pixels[y * pitch_pixels + x] = pixels[(y + 18) * pitch_pixels + x];
+            }
+        }
+        for (uint32_t y = fb->height - 18; y < fb->height; ++y) {
+            for (uint32_t x = 0; x < pitch_pixels; ++x) {
+                pixels[y * pitch_pixels + x] = 0;
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < pitch_pixels * fb->height; ++i) {
+            pixels[i] = 0;
+        }
+        cursor_y = 0;
+        return;
+    }
+    cursor_y = cursor_y >= 18 ? cursor_y - 18 : 0;
+}
+
+static void keep_cursor_visible(void) {
+    if (fb->height <= 16) {
+        cursor_y = 0;
+        return;
+    }
+    while (cursor_y + 16 > fb->height) {
+        scroll_console();
+    }
+}
+
 void kputc(char c, uint32_t fg_color) {
     if (c == '\n') {
         cursor_x = 10;
         cursor_y += 18;
+        keep_cursor_visible();
     } else {
         draw_char(c, cursor_x, cursor_y, fg_color, 0x000000);
         cursor_x += 8;
         if (cursor_x >= fb->width - 10) {
             cursor_x = 10;
             cursor_y += 18;
+            keep_cursor_visible();
         }
     }
 }
@@ -102,8 +149,37 @@ void kclear(void) {
 
 static void halt(void) {
     for (;;) {
-        __asm__("hlt");
+        keyboard_process_pending();
+        keyboard_wait_for_event();
     }
+}
+
+static void initialize_storage(void) {
+    if (vfs_init() != 0) {
+        serial_write("STORAGE: VFS initialization failed\n");
+        kprint("VFS initialization failed.\n", 0xFF0000);
+        return;
+    }
+
+    blockdev_init();
+    block_device *dev = blockdev_get_by_index(0);
+    if (dev == NULL) {
+        serial_write("STORAGE: no boot disk module found\n");
+        kprint("No boot disk module found.\n", 0xFF0000);
+        return;
+    }
+    if (fat32_mount(dev, &boot_fat32) != 0) {
+        serial_write("STORAGE: FAT32 mount failed\n");
+        kprint("FAT32 mount failed.\n", 0xFF0000);
+        return;
+    }
+    if (vfs_do_mount("/", "fat32", dev, &fat32_ops, &boot_fat32) != 0) {
+        serial_write("STORAGE: root VFS mount failed\n");
+        kprint("Root VFS mount failed.\n", 0xFF0000);
+        return;
+    }
+    serial_write("STORAGE: FAT32 mounted at /\n");
+    kprint("FAT32 mounted at /\n", 0x00FF00);
 }
 
 void _start(void) {
@@ -123,6 +199,8 @@ void _start(void) {
     kprint("MyOS CLI Interactive Shell v0.1.1\n", 0x00FF00);
     kprint("Type 'help' for available commands.\n\n", 0xFFFFFF);
 
+    serial_write("BOOT: initializing GDT and TSS\n");
+    arch_cpu_init();
     serial_write("BOOT: initializing IDT\n");
     idt_init();
     serial_write("BOOT: initializing PMM\n");
@@ -164,6 +242,17 @@ void _start(void) {
     pmm_self_test();
     serial_write("BOOT: running VM self-test\n");
     vm_self_test();
+    serial_write("BOOT: running ELF self-test\n");
+    elf_self_test();
+    serial_write("ELF: self-test passed\n");
+
+    serial_write("BOOT: initializing heap\n");
+    heap_init();
+    serial_write("BOOT: initializing storage\n");
+    initialize_storage();
+
+    serial_write("BOOT: launching userspace /init\n");
+    usermode_run_init();
 
     serial_write("BOOT: ready for CLI\n");
     kprint("MyOS:> ", 0x00FFFF);

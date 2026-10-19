@@ -16,6 +16,7 @@
 #define VMM_PAGE_LARGE          0x080ULL
 #define VMM_PAGE_GLOBAL         0x100ULL
 #define VMM_PAGE_NX             0x8000000000000000ULL
+#define VMM_PAGE_ADDRESS_MASK   0x000FFFFFFFFFF000ULL
 
 void vm_init(void);
 void vm_self_test(void);
@@ -27,9 +28,17 @@ uint64_t vm_get_cr3(void);
 bool     vm_is_initialized(void);
 
 bool vm_map_page(uint64_t virtual_address, uint64_t physical_address, uint64_t flags);
+bool vm_map_page_in(uint64_t pml4_physical_address, uint64_t virtual_address,
+                    uint64_t physical_address, uint64_t flags);
 bool vm_unmap_page(uint64_t virtual_address);
 bool vm_get_physical(uint64_t virtual_address, uint64_t *physical_address);
+bool vm_get_physical_in(uint64_t pml4_physical_address, uint64_t virtual_address,
+                        uint64_t *physical_address);
+bool vm_get_page_flags_in(uint64_t pml4_physical_address, uint64_t virtual_address,
+                          uint64_t *flags);
 bool vm_is_mapped(uint64_t virtual_address);
+bool vm_user_range_valid(uint64_t pml4_physical_address, uint64_t address, uint64_t length);
+bool vm_destroy_address_space(uint64_t pml4_physical_address);
 
 /* Map a physical address up into the higher-half so we can touch it. */
 uint64_t vm_phys_to_virt(uint64_t physical_address);

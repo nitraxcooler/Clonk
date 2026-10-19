@@ -1,20 +1,77 @@
-# Implementation Plan — MyOS Memory, Debugging, VFS & Filesystem Roadmap
+# Implementation Plan — MyOS Subsystems & Roadmap
 
 ## Goal
 
-Incrementally extend the existing MyOS x86-64 kernel with a **kernel heap**, **improved page-fault diagnostics**, a **block-device abstraction**, a **VFS layer**, **FAT32 read/write support**, and a minimal **MyBread filesystem** — preserving and reusing the existing PMM, VMM, IDT, panic, CLI, and Limine boot architecture, and testing every major stage in QEMU.
+Track incremental development of the existing MyOS x86-64 kernel while preserving and reusing its PMM, VMM, IDT, panic, CLI, and Limine boot architecture. MyOS now has an initial **ring 3 userspace bring-up** alongside the heap, diagnostics, block-device, VFS, and FAT32 infrastructure. MyBread and a general process/scheduler model remain future work.
 
 ## Scope & Context
 
-This is a freestanding C kernel (no libc, no POSIX, no C++ RTTI/exceptions). It currently has:
+This is a freestanding C kernel (no libc, no POSIX, no C++ RTTI/exceptions). Its current relevant infrastructure includes:
 
 - **PMM** (`src/kernel/pmm.[ch]`) — bitmap-based physical page allocator, 4 KiB pages, returns physical addresses (`0` on OOM).
-- **VMM** (`src/kernel/vmm.[ch]`) — 4-level page tables (PML4→PDPT→PD→PT), `vm_map_page`/`vm_unmap_page`/`vm_get_physical`, identity-maps usable memory and the kernel high-half image (`0xffffffff80000000`, HHDM offset).
+- **VMM** (`src/kernel/vmm.[ch]`) — 4-level page tables (PML4→PDPT→PD→PT), page mapping and translation, user-page permissions/range validation, and private lower-half address spaces sharing supervisor-only kernel mappings.
 - **Panic** (`src/kernel/panic.[ch]`) — full-screen red Kernel Panic; `kernel_panic_exception()` and `kernel_panic_page_fault()` already exist. Page-fault path reads CR2 and shows fault address, raw error code, RIP, optional RSP — but does **not** decode the error-code bits nor dump general-purpose registers.
 - **IDT/ISR** (`src/arch/x86_64/idt.[ch]`, `isr.s`) — exception stubs push RAX–R15 then call `exception_handler_err(stack, vector)`; the CPU error frame sits at `stack + 15`. General registers are on the stack but currently discarded.
-- **CLI** — in `src/drivers/keyboard/keyboard.c` (`help`, `echo`, `version`, `clear`, `panic`, `mem`, `vmem`).
+- **CLI** — keyboard input is handled in `src/drivers/keyboard/keyboard.c`;
+  command dispatch and VFS-backed file commands live in `src/shell/shell.c`.
 - **Build** — GNU Make + Clang + custom `linker.lds`; QEMU test via `make clean` / `make` / `make run` (headless serial output currently).
-- **No** heap, block-device layer, VFS, or filesystem exists yet.
+- **Userspace** (`src/kernel/elf.c`, `src/kernel/usermode.c`, `src/arch/x86_64/gdt.c`, `src/arch/x86_64/usermode.s`) — GDT/TSS privilege transition, bounded ELF64 `ET_EXEC` loading, a four-page user stack, and the initial `/init` using `int 0x80`.
+
+## Userspace bring-up — implemented foundation and limits
+
+The kernel installs its own GDT and 64-bit TSS. Ring 3 uses selectors `0x1b`
+(data) and `0x23` (code), and privilege transitions land on a dedicated ring
+0 stack. IDT vector `0x80` is a DPL-3 interrupt gate. The syscall convention
+is defined in `src/abi/syscall.h`: syscall ID in `RAX`, arguments in `RDI` and
+`RSI`, and signed return value in `RAX`. `write` accepts up to 256 bytes only
+after verifying that all supplied bytes are in present user pages, then writes
+to the framebuffer console and COM1; `exit` returns from `/init`. `read`
+accepts a writable one-byte user buffer, blocks until a queued keyboard
+character is available, stores it, and returns `1`; invalid arguments return
+`-1`. Enter and Backspace are delivered as `\n` and `\b`. The wait enables
+interrupts and uses `hlt`, so it sleeps without a scheduler but only supports
+the single active process. `clear` takes no arguments and clears the framebuffer.
+Unknown syscall IDs and invalid buffers return `-1`.
+
+`/init` is a persistent Ring 3 shell with `help`, `echo TEXT`, `clear`,
+`version`, and `exit`. It accepts lines up to 127 characters, supports basic
+Backspace editing, and rejects overlong lines rather than running a truncated
+command. The keyboard interrupt translates and queues keys only. A bounded
+kernel-owned queue is consumed by the userspace read syscall while `/init` is
+active; after exit, queued userspace input is discarded and the kernel shell
+resumes consuming new keys. The kernel shell retains its existing commands,
+with line editing and command dispatch deferred outside the keyboard IRQ.
+
+The ELF loader checks ELF64/little-endian/x86-64 `ET_EXEC` headers, program
+header bounds, file/memory sizes, alignment, user virtual-address bounds, and
+that the entry lies in an executable `PT_LOAD` segment before allocating
+process pages. The initial format limit is 128 program headers and 64 MiB of
+non-overlapping load pages; writable+executable segments are rejected. It
+maps supported segments with user permissions, honors writable/executable
+flags, rejects dynamic/interpreter/TLS and unknown program segment types, and
+creates a fixed four-page user stack with an unmapped guard page below it.
+Boot-time ELF self-tests cover malformed inputs, permissions, guard placement,
+and address-space reclamation; `/init` checks invalid syscall pointers in ring
+3. A test-only `MYOS_TEST_SUPERVISOR_FAULT` build verifies that a user access
+to a supervisor mapping terminates the process and returns to the kernel.
+Each process gets a separate PML4 with the kernel's supervisor-only upper-half
+mappings copied; private lower-half pages and page tables are reclaimed on
+exit. User exceptions terminate `/init` instead of entering the kernel panic
+handler.
+
+`src/userspace/init.c` is linked as a static ELF and bundled as a Limine
+module. Boot initializes the kernel heap, creates the RAM disk, initializes
+the VFS, and mounts the FAT32 module at `/` before starting `/init`. QEMU
+keyboard tests verified the userspace prompt, built-ins, empty input,
+Backspace correction, oversized-command rejection, and `exit` back to the
+kernel shell. There is no scheduler, general process creation, dynamic linking,
+arguments, libc, or userspace filesystem access. NX
+protection is enabled when supported by the CPU; processors without NX cannot
+enforce non-executable data pages. QEMU regression runs passed; physical
+hardware has not been tested. The older planning sections below document
+other subsystems and long-term work and do not override this current-state
+summary.
+Boot initialization also makes the shell's VFS-backed file commands available.
 
 ## High-level approach
 

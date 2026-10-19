@@ -23,7 +23,10 @@ keyboard_isr_stub:
     push %r14
     push %r15
 
+    mov %rsp, %r12
+    andq $-16, %rsp
     call keyboard_handler
+    mov %r12, %rsp
 
     pop %r15
     pop %r14
@@ -63,7 +66,10 @@ isr\vector:
     push %r15
     mov %rsp, %rdi
     mov $\vector, %rsi
+    mov %rsp, %r12
+    andq $-16, %rsp
     call exception_handler_noerr
+    mov %r12, %rsp
     hlt
     jmp .
 .endm
@@ -88,7 +94,10 @@ isr\vector:
     push %r15
     mov %rsp, %rdi
     mov $\vector, %rsi
+    mov %rsp, %r12
+    andq $-16, %rsp
     call exception_handler_err
+    mov %r12, %rsp
     hlt
     jmp .
 .endm

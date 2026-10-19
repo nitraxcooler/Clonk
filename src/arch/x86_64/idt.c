@@ -1,11 +1,13 @@
 #include "idt.h"
 #include "io.h"
 #include "kernel/panic.h"
+#include "kernel/usermode.h"
 
 static struct idt_entry idt[256];
 static struct idt_ptr idtr;
 
 extern void keyboard_isr_stub(void);
+extern void syscall_isr_stub(void);
 extern void isr0(void);
 extern void isr1(void);
 extern void isr2(void);
@@ -104,6 +106,9 @@ void exception_handler_noerr(uint64_t *stack, uint64_t vector) {
     uint64_t rsp = 0;
     uint64_t ss = 0;
 
+    if ((cpu_frame[1] & 3U) == 3U) {
+        user_process_fault(vector, rip, 0);
+    }
     if (vector < 32) {
         name = exception_names[vector];
     }
@@ -122,6 +127,9 @@ void exception_handler_err(uint64_t *stack, uint64_t vector) {
     uint64_t ss = 0;
     uint64_t fault_address = 0;
 
+    if ((cs & 3U) == 3U) {
+        user_process_fault(vector, rip, error_code);
+    }
     if (vector < 32) {
         name = exception_names[vector];
     }
@@ -136,21 +144,21 @@ void exception_handler_err(uint64_t *stack, uint64_t vector) {
          * error code (stack[15]) then RIP/CS/RFLAGS. We re-assemble all of
          * it into a cpu_reg_frame so the panic handler has the full story. */
         cpu_reg_frame frame;
-        frame.rax    = stack[0];
-        frame.rbx    = stack[1];
-        frame.rcx    = stack[2];
-        frame.rdx    = stack[3];
-        frame.rsi    = stack[4];
-        frame.rdi    = stack[5];
-        frame.rbp    = stack[6];
+        frame.rax    = stack[14];
+        frame.rbx    = stack[13];
+        frame.rcx    = stack[12];
+        frame.rdx    = stack[11];
+        frame.rsi    = stack[10];
+        frame.rdi    = stack[9];
+        frame.rbp    = stack[8];
         frame.r8     = stack[7];
-        frame.r9     = stack[8];
-        frame.r10    = stack[9];
-        frame.r11    = stack[10];
-        frame.r12    = stack[11];
-        frame.r13    = stack[12];
-        frame.r14    = stack[13];
-        frame.r15    = stack[14];
+        frame.r9     = stack[6];
+        frame.r10    = stack[5];
+        frame.r11    = stack[4];
+        frame.r12    = stack[3];
+        frame.r13    = stack[2];
+        frame.r14    = stack[1];
+        frame.r15    = stack[0];
         frame.rip    = rip;
         frame.cs     = cs;
         frame.rflags = rflags;
@@ -197,6 +205,7 @@ void idt_init(void) {
     idt_set_gate(30, (uint64_t)isr30, cs, 0x8E);
     idt_set_gate(31, (uint64_t)isr31, cs, 0x8E);
     idt_set_gate(0x21, (uint64_t)keyboard_isr_stub, cs, 0x8E);
+    idt_set_gate(0x80, (uint64_t)syscall_isr_stub, cs, 0xEE);
 
     __asm__ volatile ("lidt %0" : : "m"(idtr));
 

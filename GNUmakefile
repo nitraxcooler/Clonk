@@ -12,6 +12,7 @@ else
 CC = cc
 LD = ld
 endif
+PYTHON ?= python3
 
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
@@ -41,6 +42,9 @@ QEMU_MONITOR ?= none
 CFLAGS = -Wall -Wextra -std=gnu11 -ffreestanding -fno-stack-protector \
          -fno-pie -fno-PIC -m64 -march=x86-64 -mno-red-zone -mcmodel=large \
          -mno-mmx -mno-sse -mno-sse2 -mno-80387 -msoft-float -I src
+USER_CFLAGS = -Wall -Wextra -std=gnu11 -ffreestanding -fno-stack-protector \
+              -fno-pie -m64 -march=x86-64 -mno-red-zone -mcmodel=small \
+              -mno-mmx -mno-sse -mno-sse2 -mno-80387 -msoft-float -I src
 
 # Clang needs --target so it knows it's building bare-metal ELF for x86-64.
 ifneq ($(findstring clang,$(CC)),)
@@ -53,6 +57,8 @@ C_SOURCES = \
     src/kernel/main.c \
     src/kernel/pmm.c \
     src/kernel/vmm.c \
+    src/kernel/elf.c \
+    src/kernel/usermode.c \
     src/kernel/heap.c \
     src/kernel/panic.c \
     src/kernel/blockdev.c \
@@ -60,13 +66,14 @@ C_SOURCES = \
     src/fs/fat32.c \
     src/graphics/font.c \
     src/arch/x86_64/idt.c \
+    src/arch/x86_64/gdt.c \
     src/drivers/keyboard/keyboard.c \
     src/drivers/storage/ramdisk.c \
     src/lib/string.c \
     src/lib/mem.c \
     src/shell/shell.c
 
-ASM_SOURCES = src/arch/x86_64/isr.s
+ASM_SOURCES = src/arch/x86_64/isr.s src/arch/x86_64/usermode.s
 
 OBJS = $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(C_SOURCES)) \
        $(patsubst src/%.s,$(OBJ_DIR)/%.o,$(ASM_SOURCES))
@@ -75,6 +82,8 @@ DEPS = $(OBJS:.o=.d)
 ISO_CONFIG = $(ISO_BOOT_DIR)/limine.conf
 ISO_KERNEL = $(ISO_BOOT_DIR)/myos.elf
 ISO_FATIMG = $(ISO_BOOT_DIR)/fat32.img
+ISO_INIT = $(ISO_BOOT_DIR)/init.elf
+USER_INIT = $(BUILD_DIR)/userspace/init.elf
 FATIMG_SRC = tools/make_fat32_img.py
 FATIMG = $(BUILD_DIR)/fat32.img
 ISO_LIMINE_FILES = \
@@ -94,6 +103,15 @@ $(OBJ_DIR)/%.o: src/%.s
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/userspace/init.o: src/userspace/init.c src/abi/syscall.h
+	mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) $(if $(findstring clang,$(CC)),--target=$(TARGET_TRIPLE)) -c $< -o $@
+
+$(USER_INIT): $(BUILD_DIR)/userspace/init.o src/userspace/linker.lds
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -static -no-pie -T src/userspace/linker.lds \
+	    $(BUILD_DIR)/userspace/init.o -o $@
+
 $(KERNEL): $(OBJS) linker.lds
 	mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) $(OBJS) -o $@
@@ -108,10 +126,14 @@ $(ISO_KERNEL): $(KERNEL)
 
 $(FATIMG): $(FATIMG_SRC)
 	@mkdir -p $(BUILD_DIR)
-	python3 $(FATIMG_SRC)
+	$(PYTHON) $(FATIMG_SRC)
 
 $(ISO_FATIMG): $(FATIMG)
 	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(ISO_INIT): $(USER_INIT)
+	mkdir -p $(dir $@)
 	cp $< $@
 
 $(ISO_BOOT_DIR)/limine-bios-cd.bin: $(LIMINE_DIR)/limine-bios-cd.bin
@@ -129,7 +151,7 @@ $(ISO_BOOT_DIR)/limine-uefi-cd.bin: $(LIMINE_DIR)/limine-uefi-cd.bin
 $(LIMINE_TOOL):
 	$(MAKE) -C $(LIMINE_DIR)
 
-$(ISO): $(ISO_KERNEL) $(ISO_CONFIG) $(ISO_FATIMG) $(ISO_LIMINE_FILES) $(LIMINE_TOOL)
+$(ISO): $(ISO_KERNEL) $(ISO_CONFIG) $(ISO_FATIMG) $(ISO_INIT) $(ISO_LIMINE_FILES) $(LIMINE_TOOL)
 	mkdir -p $(dir $@)
 	xorriso -as mkisofs -b boot/limine-bios-cd.bin \
 	    -no-emul-boot -boot-load-size 4 -boot-info-table \

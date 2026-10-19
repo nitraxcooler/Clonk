@@ -113,7 +113,6 @@ static void pmm_mark_region_used(uint64_t base, uint64_t length) {
 
 /* Find a usable memory region big enough to hold the page bitmap. */
 static uint64_t pmm_find_bitmap_location(uint64_t kernel_start_phys, uint64_t kernel_end_phys) {
-    (void)kernel_start_phys;
     if (limine_memmap_request.response == NULL) {
         kernel_panic("PMM memory map unavailable");
     }
@@ -136,13 +135,16 @@ static uint64_t pmm_find_bitmap_location(uint64_t kernel_start_phys, uint64_t ke
             continue;
         }
 
-        uint64_t candidate = align_up(region_start, PAGE_SIZE);
+        uint64_t required = pmm_bitmap_pages * PAGE_SIZE;
+        uint64_t candidate = region_start;
         if (candidate < kernel_end_phys) {
+            if (candidate < kernel_start_phys &&
+                required <= kernel_start_phys - candidate) {
+                if (required <= region_end - candidate) return candidate;
+            }
             candidate = align_up(kernel_end_phys, PAGE_SIZE);
         }
-
-        uint64_t required = pmm_bitmap_pages * PAGE_SIZE;
-        if ((candidate + required) <= region_end) {
+        if (candidate <= region_end && required <= region_end - candidate) {
             return candidate;
         }
     }

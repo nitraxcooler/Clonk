@@ -15,25 +15,31 @@ SECTIONS
     __kernel_start = .;
 
     .text : {
+        __kernel_text_start = .;
         *(.text .text.*)
+        *(.ltext .ltext.*)
+        __kernel_text_end = .;
     } :text
 
     . = ALIGN(0x1000);
 
     .rodata : {
         *(.rodata .rodata.*)
+        *(.lrodata .lrodata.*)
     } :rodata
 
     . = ALIGN(0x1000);
 
     .data : {
         *(.data .data.*)
+        *(.ldata .ldata.*)
         *(.requests)
     } :data
 
     .bss : {
         *(COMMON)
         *(.bss .bss.*)
+        *(.lbss .lbss.*)
     } :data
 
     . = ALIGN(0x1000);
