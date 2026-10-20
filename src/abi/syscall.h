@@ -16,6 +16,15 @@
 #define MYOS_SYS_FS_MKDIR  10
 #define MYOS_SYS_FS_UNLINK 11
 #define MYOS_SYS_FS_RMDIR  12
+#define MYOS_SYS_SPAWN     13
+#define MYOS_SYS_WAIT      14
+#define MYOS_SYS_YIELD     15
+#define MYOS_SYS_GETPID    16
+
+#define MYOS_PROCESS_ERR_INVALID  (-1)
+#define MYOS_PROCESS_ERR_NOT_FOUND (-3)
+#define MYOS_PROCESS_ERR_NO_MEMORY (-8)
+#define MYOS_PROCESS_ERR_LIMIT    (-11)
 
 #define MYOS_FS_OPEN_READ      0x01U
 #define MYOS_FS_OPEN_WRITE     0x02U

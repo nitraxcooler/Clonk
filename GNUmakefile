@@ -49,6 +49,7 @@ C_SOURCES = \
     src/kernel/pmm.c \
     src/kernel/vmm.c \
     src/kernel/elf.c \
+    src/kernel/process.c \
     src/kernel/usermode.c \
     src/kernel/userfs.c \
     src/kernel/usercopy.c \
@@ -78,7 +79,14 @@ ISO_CONFIG = $(ISO_BOOT_DIR)/limine.conf
 ISO_KERNEL = $(ISO_BOOT_DIR)/myos.elf
 ISO_FATIMG = $(ISO_BOOT_DIR)/fat32.img
 ISO_INIT = $(ISO_BOOT_DIR)/init.elf
+ISO_SCHED_A = $(ISO_BOOT_DIR)/sched-a.elf
+ISO_SCHED_B = $(ISO_BOOT_DIR)/sched-b.elf
+ISO_SCHED_FAULT = $(ISO_BOOT_DIR)/sched-fault.elf
+ISO_SCHED_INVALID = $(ISO_BOOT_DIR)/sched-invalid.elf
 USER_INIT = $(BUILD_DIR)/userspace/init.elf
+USER_SCHED_A = $(BUILD_DIR)/userspace/sched-a.elf
+USER_SCHED_B = $(BUILD_DIR)/userspace/sched-b.elf
+USER_SCHED_FAULT = $(BUILD_DIR)/userspace/sched-fault.elf
 FATIMG_SRC = tools/make_fat32_img.py
 FATIMG = $(BUILD_DIR)/fat32.img
 AHCI_TEST_IMAGE = $(BUILD_DIR)/ahci-test.img
@@ -112,6 +120,33 @@ $(USER_INIT): $(BUILD_DIR)/userspace/init.o src/userspace/linker.lds
 	$(LD) -m elf_x86_64 -nostdlib -static -no-pie -T src/userspace/linker.lds \
 	    $(BUILD_DIR)/userspace/init.o -o $@
 
+$(BUILD_DIR)/userspace/sched-a.o: src/userspace/sched_test.c src/abi/syscall.h
+	mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) $(if $(findstring clang,$(CC)),--target=$(TARGET_TRIPLE)) \
+	    -DSCHED_LABEL=65 -c $< -o $@
+
+$(BUILD_DIR)/userspace/sched-b.o: src/userspace/sched_test.c src/abi/syscall.h
+	mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) $(if $(findstring clang,$(CC)),--target=$(TARGET_TRIPLE)) \
+	    -DSCHED_LABEL=66 -c $< -o $@
+
+$(BUILD_DIR)/userspace/sched-fault.o: src/userspace/sched_fault.c src/abi/syscall.h
+	mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) $(if $(findstring clang,$(CC)),--target=$(TARGET_TRIPLE)) \
+	    -c $< -o $@
+
+$(USER_SCHED_A): $(BUILD_DIR)/userspace/sched-a.o src/userspace/linker.lds
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -static -no-pie -T src/userspace/linker.lds $< -o $@
+
+$(USER_SCHED_B): $(BUILD_DIR)/userspace/sched-b.o src/userspace/linker.lds
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -static -no-pie -T src/userspace/linker.lds $< -o $@
+
+$(USER_SCHED_FAULT): $(BUILD_DIR)/userspace/sched-fault.o src/userspace/linker.lds
+	mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -nostdlib -static -no-pie -T src/userspace/linker.lds $< -o $@
+
 $(KERNEL): $(OBJS) linker.lds
 	mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) $(OBJS) -o $@
@@ -144,6 +179,22 @@ $(ISO_INIT): $(USER_INIT)
 	mkdir -p $(dir $@)
 	cp $< $@
 
+$(ISO_SCHED_A): $(USER_SCHED_A)
+	mkdir -p $(dir $@)
+	cp $< $@
+
+$(ISO_SCHED_B): $(USER_SCHED_B)
+	mkdir -p $(dir $@)
+	cp $< $@
+
+$(ISO_SCHED_FAULT): $(USER_SCHED_FAULT)
+	mkdir -p $(dir $@)
+	cp $< $@
+
+$(ISO_SCHED_INVALID): src/userspace/sched-invalid.img
+	mkdir -p $(dir $@)
+	cp $< $@
+
 $(ISO_BOOT_DIR)/limine-bios-cd.bin: $(LIMINE_DIR)/limine-bios-cd.bin
 	mkdir -p $(dir $@)
 	cp $< $@
@@ -159,7 +210,10 @@ $(ISO_BOOT_DIR)/limine-uefi-cd.bin: $(LIMINE_DIR)/limine-uefi-cd.bin
 $(LIMINE_TOOL):
 	$(MAKE) -C $(LIMINE_DIR)
 
-$(ISO): $(ISO_KERNEL) $(ISO_CONFIG) $(ISO_FATIMG) $(ISO_INIT) $(ISO_LIMINE_FILES) $(LIMINE_TOOL)
+$(ISO): $(ISO_KERNEL) $(ISO_CONFIG) $(ISO_FATIMG) $(ISO_INIT) \
+        $(ISO_SCHED_A) $(ISO_SCHED_B) $(ISO_SCHED_FAULT) \
+        $(ISO_SCHED_INVALID) \
+        $(ISO_LIMINE_FILES) $(LIMINE_TOOL)
 	mkdir -p $(dir $@)
 	xorriso -as mkisofs -b boot/limine-bios-cd.bin \
 	    -no-emul-boot -boot-load-size 4 -boot-info-table \

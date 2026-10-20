@@ -42,6 +42,14 @@ static uint64_t tss_descriptor(uint64_t base, uint32_t limit) {
            (((base >> 24) & 0xFFULL) << 56);
 }
 
+void arch_set_kernel_stack(uint64_t stack_top) {
+    tss.rsp0 = stack_top;
+}
+
+uint64_t arch_kernel_stack_top(void) {
+    return (uint64_t)(uintptr_t)(ring0_stack + sizeof(ring0_stack));
+}
+
 int arch_nx_enabled(void) {
     return nx_enabled;
 }

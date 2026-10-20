@@ -2,13 +2,15 @@
 
 > A hobby operating system built from scratch in C for x86-64, booted with Limine.
 
-MyOS is a learning project for exploring operating-system development from
-boot and hardware interfaces through memory management, filesystems, and a
-small Ring 3 userspace. It is an actively developed kernel, not a general
-purpose or production-ready operating system.
+MyOS is an actively developed learning project for operating-system
+development, from boot and hardware interfaces through memory management,
+filesystems, and a small Ring 3 userspace. It is not a general-purpose or
+production-ready operating system.
 
-The project currently boots into a persistent userspace shell and can return
-to its kernel shell. Its version command reports **v0.1.1**.
+The project boots into an interactive Ring 3 `/init` shell and returns to the
+kernel shell when `/init` exits. The runtime `version` command reports
+**v0.1.1**. The local Git tags include `v0.1.0` and `Pre-Release`; the runtime
+string does not imply that a `v0.1.1` release tag exists.
 
 ## Current Features
 
@@ -16,13 +18,17 @@ to its kernel shell. Its version command reports **v0.1.1**.
 - GDT/TSS setup, IDT, interrupt service routines, and CPU exception handling
 - Physical memory manager, 4-level virtual memory manager, and kernel heap
 - Kernel panic and page-fault diagnostics
-- Separate lower-half address space for the initial Ring 3 program, with
-  supervisor-only kernel mappings
+- Separate lower-half address spaces for Ring 3 tasks, with supervisor-only
+  shared kernel mappings
 - Bounded static ELF64 executable loader and four-page userspace stack with a
   guard page
 - `int 0x80` syscall ABI for console output, keyboard input, clearing the
   display, exit, and VFS filesystem access
-- Persistent `/init` interactive userspace shell
+- Interactive Ring 3 `/init` shell that remains active until it exits
+- Eight-slot process table, per-process kernel stacks and filesystem handles,
+  parent wait/exit handling, and PIT-driven single-CPU round-robin scheduling
+- Bundled Ring 3 process tests for task interleaving, memory isolation,
+  process-table limits, and user-fault isolation
 - Block-device registry, Limine-module-backed RAM disk, VFS, and FAT32
   filesystem operations
 - PCI enumeration and an AHCI SATA driver with bounded LBA48 DMA reads,
@@ -30,8 +36,10 @@ to its kernel shell. Its version command reports **v0.1.1**.
 - PS/2 keyboard input and a custom 8x16 bitmap font for framebuffer text
 - QEMU build and test workflow
 
-This is a **single-process userspace bring-up**. It does not have a scheduler,
-dynamic linker, libc, or general process manager.
+MyOS provides an early **single-CPU process-management foundation**. Its
+syscall ABI and process model are custom; it does not provide POSIX
+compatibility, a complete userspace runtime, or a general-purpose process
+environment.
 
 ## Shells and Commands
 
@@ -87,6 +95,7 @@ display.
 | `rm PATH` | Remove a file; directories are rejected |
 | `mkdir PATH` | Create a directory |
 | `rmdir PATH` | Remove an empty directory |
+| `run` | Run bundled process tests and wait for all children |
 
 For `write`, the first whitespace-delimited argument is the path and the
 remaining text, including spaces, is written to the file. Other path-taking
@@ -97,13 +106,14 @@ The userspace syscall ABI is defined in [`src/abi/syscall.h`](src/abi/syscall.h)
 The existing syscall IDs remain `WRITE=1`, `EXIT=2`, `READ=3`, and `CLEAR=4`.
 Filesystem calls use IDs `FS_OPEN=5`, `FS_READ=6`, `FS_WRITE=7`,
 `FS_READDIR=8`, `FS_CLOSE=9`, `FS_MKDIR=10`, `FS_UNLINK=11`, and
-`FS_RMDIR=12`. The ID is passed in `RAX`, arguments in `RDI`, `RSI`, and
-`RDX`, and a signed result is returned in `RAX`.
+`FS_RMDIR=12`. Process calls use `SPAWN=13`, `WAIT=14`, `YIELD=15`, and
+`GETPID=16`. The ID is passed in `RAX`, arguments in `RDI`, `RSI`, and `RDX`,
+and a signed result is returned in `RAX`.
 
 | Existing call | Arguments | Result |
 | --- | --- | --- |
 | `WRITE` | `RDI=buffer`, `RSI=count` (maximum 256) | `0`, or `-1` for invalid input |
-| `EXIT` | Optional `RDI=status` (ignored) | Does not return; resumes kernel shell |
+| `EXIT` | Optional `RDI=status` | Child status is recorded; `/init` returns to the kernel shell |
 | `READ` | `RDI=buffer`, `RSI=1` | `1` character, or `-1` |
 | `CLEAR` | No arguments | `0`, or `-1` for invalid arguments |
 
@@ -117,6 +127,36 @@ Filesystem calls use IDs `FS_OPEN=5`, `FS_READ=6`, `FS_WRITE=7`,
 | `FS_MKDIR` | `RDI=path` | `0` on success |
 | `FS_UNLINK` | `RDI=path` | `0` on success |
 | `FS_RMDIR` | `RDI=path` | `0` on success; non-empty directories are rejected |
+| `SPAWN` | `RDI=module path`, `RSI=0`, `RDX=0` | Child PID, or `-1` invalid ELF/arguments, `-3` missing module, `-8` allocation failure, `-11` table full |
+| `WAIT` | `RDI=child PID`, `RSI=optional writable status address`, `RDX=0` | Child PID after exit, or `-1` for invalid PID, parent, or buffer |
+| `YIELD` | All arguments zero | `0`; another runnable task runs when available |
+| `GETPID` | All arguments zero | Current process ID |
+
+The process table has eight slots, including PID 1 for `/init`. Child
+processes have independent user address spaces, four-page user stacks, 16 KiB
+kernel stacks, and filesystem descriptor tables. `SPAWN` currently recognizes
+the bundled `/boot/sched-a.elf`, `/boot/sched-b.elf`,
+`/boot/sched-fault.elf`, and malformed-ELF regression module; the malformed
+image is rejected and never registered. Executables are not loaded from the
+mounted filesystem. The loader supports the existing bounded static x86-64
+ELF64 `ET_EXEC` subset.
+
+The PIT runs at 100 Hz through the existing 8259 PIC. Timer interrupts
+reschedule only from Ring 3 frames using the saved-register/`iretq` format.
+The scheduler switches CR3 and updates TSS `RSP0` before restoring the next
+task. A timer tick in Ring 0 only requests rescheduling, which is deferred to
+a syscall-return boundary; kernel execution is not preemptible. `WAIT` blocks
+its caller until the selected child exits. Child exit records a status,
+closes process-owned filesystem handles, and destroys the address space only
+after switching away. A child's kernel stack remains allocated until its
+parent reaps it. A Ring 3 exception terminates only the faulting process;
+kernel exceptions still use the panic path.
+
+The `run` command checks invalid process arguments and malformed ELF
+rejection, starts independent busy-loop tasks and an invalid-opcode test
+process, fills the bounded process table, and waits for all children. It is a
+regression command for the bundled programs, not general executable-path
+support.
 
 `FS_OPEN` flags are `READ=0x1`, `WRITE=0x2`, `CREATE=0x4`, and
 `TRUNCATE=0x8`. At least one access flag is required; create and truncate
@@ -125,9 +165,10 @@ missing; only `TRUNCATE` empties an existing file. File and directory handles
 share the fixed descriptor table. Closing an invalid or already-closed
 descriptor returns an error.
 
-Filesystem operations use a kernel-owned table of 16 opaque descriptors;
-userspace never supplies a kernel VFS pointer. Reads and writes are limited
-to 512 bytes per call. Paths must be NUL-terminated within 256 bytes, are
+Filesystem operations use a per-process kernel-owned table of 16 opaque
+descriptors; userspace never supplies a kernel VFS pointer. Reads and writes
+are limited to 512 bytes per call. Paths must be NUL-terminated within 256
+bytes, are
 resolved from the root, and are restricted to the current FAT 8.3-compatible
 name rules. `.` and `..` components are rejected. User memory is checked for
 user access across every mapped page, write permission is required for
@@ -138,7 +179,7 @@ directory (`-4`), is a directory (`-5`), already exists (`-6`), read-only
 (`-7`), out of memory (`-8`), no space (`-9`), invalid descriptor (`-10`),
 resource/transfer limit (`-11`), I/O (`-12`), unsupported or failed operation
 (`-13`), and non-empty directory (`-14`). Handles close on explicit close,
-userspace exit, or user exception. These checks reduce accidental invalid
+process exit, or user exception. These checks reduce accidental invalid
 accesses; they are not a formal security proof.
 
 The kernel routes keyboard characters to `/init` through a bounded
@@ -210,7 +251,7 @@ uses short names rather than `persist-test`.
 
 ## Screenshots
 
-No screenshot assets are currently included in the repository.
+Screenshots coming soon.
 
 ## Project Structure
 
@@ -226,10 +267,10 @@ MyOS/
 │   │   └── storage/        # RAM disk and AHCI
 │   ├── fs/                 # VFS and FAT32
 │   ├── graphics/           # Bitmap font
-│   ├── kernel/             # Startup, memory, ELF, syscalls, panic, block devices
+│   ├── kernel/             # Startup, memory, ELF, processes, syscalls, panic
 │   ├── lib/                # Freestanding memory and string helpers
 │   ├── shell/              # Kernel command shell
-│   └── userspace/          # `/init` shell and its linker script
+│   └── userspace/          # `/init`, scheduler test programs, linker script
 ├── iso_root/               # Limine boot configuration
 ├── third_party/limine/     # Included Limine files/tools
 ├── tools/                  # FAT32 image generation
@@ -248,30 +289,35 @@ created by the build and should not be treated as source.
 
 - GNU Make
 - Python 3 (generates the FAT32 image)
-- The project C/assembly toolchain and linker:
-  - Windows: MSYS2 Git Bash with the `clang64` Clang and `ld.lld` toolchain
-  - Linux/WSL: `cc` and `ld` are selected by the Makefile
+- Windows: MSYS2 Git Bash with the `clang64` Clang and `ld.lld` toolchain
 - `xorriso` for ISO creation
 - QEMU to run the resulting image
 - Limine boot files and build tool are included under `third_party/limine/`
 
-The build targets `x86_64-elf` with freestanding flags. On Windows, the
-Makefile selects `C:/msys64/clang64/bin/clang` and
-`C:/msys64/clang64/bin/ld.lld`. From Git Bash, use:
+On Windows, use MSYS2 Git Bash with GNU Make, Python 3, `xorriso`, QEMU, and
+the Clang/LLD toolchain from the MSYS2 `clang64` environment. The Makefile
+expects MSYS2 at `C:/msys64` and selects
+`C:/msys64/clang64/bin/clang` and `C:/msys64/clang64/bin/ld.lld`. The build
+targets `x86_64-elf` with freestanding flags. From Git Bash, the normal
+development workflow is:
 
 ```bash
-make clean
-make -j4 PYTHON=/c/Python314/python.exe
+make clean && make run
 ```
 
-Replace the `PYTHON` value with the Python executable available in your
-MSYS2 environment if needed. The clean command removes generated build
-artifacts; the build compiles the kernel and `/init`, generates the FAT32
-image, and creates a bootable ISO at `build/myos.iso`.
+The Makefile uses `python3` by default to generate the FAT32 image. If Python
+has a different command or path in your Git Bash environment, override it;
+for example:
 
-The Makefile also selects system `cc` and `ld` on non-Windows hosts. Linux
-builds require compatible x86-64 ELF tools in addition to Make, Python, and
-`xorriso`.
+```bash
+make clean && make run PYTHON=/c/path/to/python.exe
+```
+
+`make clean` removes the generated `build/` directory. The run target builds
+the kernel and userspace programs, creates the FAT32 image and bootable ISO at
+`build/myos.iso`, then starts QEMU. The Makefile also selects system `cc` and
+`ld` on non-Windows hosts; compatible x86-64 ELF tools, Python 3, `xorriso`,
+and QEMU are required there.
 
 ## Running in QEMU
 
@@ -320,7 +366,7 @@ VFS and FAT32
  ↓
 Ring 3 `/init` and syscalls
  ↓
-Scheduling and additional userspace
+Bounded process management and round-robin scheduling
  ↓
 MyBread and MyGUI
 ```
@@ -329,16 +375,27 @@ QEMU is the primary development and regression environment. Passing QEMU
 tests is useful evidence, not a guarantee of compatibility with physical
 machines.
 
-## Validation
+## Recorded Validation
 
-The documented Windows build command completed successfully in the
-MSYS2/Git Bash environment. QEMU boot output confirmed the ELF, syscall, and
-filesystem syscall self-tests. Interactive QEMU tests exercised `/init`
-directory and file creation, listing, multiword writes, reads, truncation,
+The recorded Windows build completed successfully using the MSYS2/Git Bash
+toolchain. QEMU boot output confirmed the ELF, syscall, and filesystem syscall
+self-tests. Interactive QEMU tests exercised `/init` directory and file
+creation, listing, multiword writes, reads, truncation,
 empty files/directories, removal, missing-path and directory-operation
 errors, oversized paths, and exit back to the kernel shell. A 300-byte file
 was read across chunks, and the kernel shell read content that `/init` had
 written to the same VFS mount.
+
+The process regression command was run three times in QEMU. Each cycle filled
+the seven child slots, verified that the next spawn failed at the table limit,
+and reaped all children before the next cycle. The serial trace showed
+interleaved output from independent `SCHED-A` and `SCHED-B` PIDs while they
+busy-looped without yielding, demonstrating PIT-driven Ring 3 preemption.
+Each test also checked private data and stack counters. The invalid-opcode
+child was reported as exception 6 with status `-134`; all other children
+returned status 0, and the remaining tasks continued. Missing and malformed
+module paths, invalid syscall arguments and wait buffers, and process-table
+exhaustion were exercised by `run`.
 
 After the handoff, kernel-shell `help`, `ls`, `cat`, `blkinfo`, and
 `selftest` were exercised; PMM, VMM, and heap checks passed. `panic` and
@@ -368,9 +425,9 @@ injected ATA timeouts, and crash recovery were not tested.
 - Block-device abstraction and Limine-module-backed RAM disk
 - VFS and FAT32 read/write and directory operations
 - Kernel shell with memory, diagnostic, storage, and filesystem commands
-- Ring 3 transition foundation and isolated lower-half address space for the
-  initial program
-- Static ELF64 `/init` loader and persistent userspace shell
+- Ring 3 transition foundation and isolated lower-half address spaces for
+  independent tasks
+- Static ELF64 `/init` loader and interactive userspace shell
 - Validated console, keyboard, exit, and filesystem syscall paths
 - Userspace filesystem commands for listing, reading, creating, writing,
   removing files, and making/removing empty directories
@@ -378,16 +435,21 @@ injected ATA timeouts, and crash recovery were not tested.
   dedicated virtual SATA image
 - QEMU checks for kernel self-tests, userspace filesystem operations,
   invalid syscall inputs, descriptor limits, and return to the kernel shell
+- Bounded process manager and process-owned filesystem handles
+- PIT/PIC round-robin preemption, process syscalls, child exit/wait, and safe
+  address-space/kernel-stack reclamation
+- QEMU evidence for multiple interleaved Ring 3 tasks, isolated data and
+  stacks, user-fault isolation, table exhaustion, and repeated spawn/reap
+  cycles
 
 ### In Progress
 
 - MyBread native filesystem design and implementation
-- Generalizing storage and userspace facilities beyond the initial shell
+- Loading user executables from the mounted filesystem
 
 ### Planned
 
-- Scheduler and multiple runnable processes
-- General process creation and lifecycle management
+- General executable loading and process creation beyond bundled modules
 - Broader storage-driver and hardware support beyond the tested QEMU AHCI path
 - Additional userspace programs and runtime support
 - Networking and audio
@@ -395,11 +457,15 @@ injected ATA timeouts, and crash recovery were not tested.
 
 ### Current limitations
 
-`/init` is the single Ring 3 process; there is no scheduler, dynamic linker,
-libc, or argv/environment setup. The ELF loader supports a bounded static
-ELF64 `ET_EXEC` subset, not dynamically linked executables. User exceptions
-terminate `/init`; kernel exceptions retain the kernel panic path. The
-standard writable root is a volatile FAT32 image loaded as a Limine module.
+The scheduler is single-CPU and bounded to eight tasks. Timer preemption
+occurs only at Ring 3 interrupt frames; Ring 0 work is not preempted. The
+existing keyboard `READ` syscall waits inside the kernel, so a task blocked
+there can delay other runnable tasks until input arrives. Process creation
+currently supports only the bundled test modules, not filesystem executables.
+There is no dynamic linker, libc, argv/environment setup, or POSIX process
+API. The ELF loader supports a bounded static ELF64 `ET_EXEC` subset. User
+exceptions terminate only the affected task; kernel exceptions retain the
+kernel panic path. The standard writable root is a volatile FAT32 image.
 The optional AHCI root is validated only with QEMU's ICH9 controller and a
 512-byte-sector test disk; it uses polling and one command slot, and lacks
 NCQ, ATAPI, and hot-plug support. FAT32 uses 8.3 filenames and does not

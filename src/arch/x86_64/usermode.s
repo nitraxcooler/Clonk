@@ -2,6 +2,7 @@
 .code64
 
 .extern syscall_dispatch
+.extern process_syscall_return
 .extern arch_saved_kernel_rsp
 .extern arch_saved_kernel_rflags
 
@@ -47,6 +48,11 @@ arch_enter_user:
 .global arch_return_to_kernel
 arch_return_to_kernel:
     movq arch_saved_kernel_rsp(%rip), %rsp
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
     popq %r15
     popq %r14
     popq %r13
@@ -78,10 +84,15 @@ syscall_isr_stub:
     movq %rsp, %rdi
     call syscall_dispatch
     movq %rax, 112(%rsp)
+    movq %rsp, %rdi
+    call process_syscall_return
+    movq %rax, %rsp
 
     movw $0x1b, %ax
     movw %ax, %ds
     movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
 
     popq %r15
     popq %r14

@@ -15,7 +15,9 @@ static inline int64_t syscall2(uint64_t number, uint64_t arg1, uint64_t arg2) {
     register uint64_t rax __asm__("rax") = number;
     register uint64_t rdi __asm__("rdi") = arg1;
     register uint64_t rsi __asm__("rsi") = arg2;
-    __asm__ volatile ("int $0x80" : "+a"(rax) : "D"(rdi), "S"(rsi) : "memory");
+    register uint64_t rdx __asm__("rdx") = 0U;
+    __asm__ volatile ("int $0x80" : "+a"(rax) :
+                      "D"(rdi), "S"(rsi), "d"(rdx) : "memory");
     return (int64_t)rax;
 }
 
@@ -82,6 +84,23 @@ static bool write_bytes(const void *buffer, size_t length) {
 
 static bool write_character(char character) {
     return syscall2(MYOS_SYS_WRITE, (uint64_t)(uintptr_t)&character, 1U) == 0;
+}
+
+static void write_signed_number(int64_t number) {
+    char digits[20];
+    size_t count = 0U;
+    uint64_t value;
+    if (number < 0) {
+        (void)write_character('-');
+        value = (uint64_t)(-(number + 1)) + 1U;
+    } else {
+        value = (uint64_t)number;
+    }
+    do {
+        digits[count++] = (char)('0' + value % 10U);
+        value /= 10U;
+    } while (value != 0U);
+    while (count != 0U) (void)write_character(digits[--count]);
 }
 
 static int syscall_validation_self_test(void) {
@@ -288,6 +307,7 @@ static void print_help(void) {
         "  rm PATH       Remove a file\n"
         "  mkdir PATH    Create a directory\n"
         "  rmdir PATH    Remove an empty directory\n"
+        "  run           Run the bundled process scheduler tests\n"
         "  exit          Return to the kernel shell\n";
     (void)write_text(help);
 }
@@ -478,6 +498,88 @@ static void command_rm(const char *path) {
     (void)write_text("\n");
 }
 
+static void command_run(void) {
+    static const char *paths[] = {
+        "/boot/sched-a.elf",
+        "/boot/sched-b.elf",
+        "/boot/sched-fault.elf",
+        "/boot/sched-a.elf",
+        "/boot/sched-b.elf",
+        "/boot/sched-a.elf",
+        "/boot/sched-b.elf"
+    };
+    int64_t pids[sizeof(paths) / sizeof(paths[0])];
+    size_t count = 0U;
+    size_t successful = 0U;
+
+    if (syscall2(MYOS_SYS_SPAWN, (uint64_t)(uintptr_t)"/boot/missing.elf",
+                 0U) != -3 ||
+        syscall2(MYOS_SYS_SPAWN,
+                 (uint64_t)(uintptr_t)"/boot/sched-invalid.elf", 0U) != -1 ||
+        syscall2(MYOS_SYS_SPAWN, 0xFFFFFFFF80000000ULL, 0U) != -1 ||
+        syscall2(MYOS_SYS_WAIT, UINT64_MAX, 0U) != -1 ||
+        syscall2(MYOS_SYS_GETPID, 1U, 0U) != -1 ||
+        syscall2(MYOS_SYS_YIELD, 1U, 0U) != -1) {
+        (void)write_text("Process syscall validation failed.\n");
+        return;
+    }
+
+    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+        int64_t pid = syscall2(MYOS_SYS_SPAWN,
+                               (uint64_t)(uintptr_t)paths[i], 0U);
+        if (pid <= 0) {
+            (void)write_text("Process creation failed: ");
+            (void)write_text(paths[i]);
+            (void)write_text("\n");
+            continue;
+        }
+        pids[count++] = pid;
+        ++successful;
+        if (i == 0U &&
+            syscall2(MYOS_SYS_WAIT, (uint64_t)pid,
+                     0xFFFFFFFF80000000ULL) != -1) {
+            (void)write_text("Invalid wait buffer check failed.\n");
+        }
+    }
+
+    if (successful != 7U ||
+        syscall2(MYOS_SYS_SPAWN, (uint64_t)(uintptr_t)paths[0], 0U) != -11) {
+        (void)write_text("Process table exhaustion check failed.\n");
+    } else {
+        (void)write_text("Process table limit check passed.\n");
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        int64_t status = INT64_MIN;
+        int64_t waited = syscall2(MYOS_SYS_WAIT, (uint64_t)pids[i],
+                                  (uint64_t)(uintptr_t)&status);
+        (void)write_text("wait pid=");
+        write_signed_number(pids[i]);
+        (void)write_text(" result=");
+        write_signed_number(waited);
+        (void)write_text(" status=");
+        write_signed_number(status);
+        (void)write_text("\n");
+        if (waited != pids[i] ||
+            (i == 2U ? status != -134 : status != 0)) {
+            (void)write_text("Process exit check failed for pid ");
+            char digits[20];
+            size_t digit_count = 0U;
+            uint64_t value = (uint64_t)pids[i];
+            do {
+                digits[digit_count++] = (char)('0' + value % 10U);
+                value /= 10U;
+            } while (value != 0U);
+            while (digit_count != 0U) {
+                char character = digits[--digit_count];
+                (void)write_bytes(&character, 1U);
+            }
+            (void)write_text(".\n");
+        }
+    }
+    (void)write_text("Process tests complete.\n");
+}
+
 static void run_command(char *line) {
     while (*line == ' ' || *line == '\t') {
         ++line;
@@ -538,6 +640,9 @@ static void run_command(char *line) {
         } else {
             command_write(path, cursor);
         }
+    } else if (strings_equal(command, command_length, "run") &&
+               *arguments == '\0') {
+        command_run();
     } else if (strings_equal(command, command_length, "clear") &&
                *arguments == '\0') {
         (void)syscall0(MYOS_SYS_CLEAR);
@@ -549,6 +654,7 @@ static void run_command(char *line) {
         (void)syscall0(MYOS_SYS_EXIT);
     } else if (strings_equal(command, command_length, "clear") ||
                strings_equal(command, command_length, "version") ||
+               strings_equal(command, command_length, "run") ||
                strings_equal(command, command_length, "exit")) {
         (void)write_text("Usage: command takes no arguments.\n");
     } else {

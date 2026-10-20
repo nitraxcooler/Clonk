@@ -6,6 +6,7 @@
 
 #include "abi/syscall.h"
 #include "fs/vfs.h"
+#include "kernel/heap.h"
 #include "kernel/usercopy.h"
 #include "kernel/vmm.h"
 #include "lib/mem.h"
@@ -20,7 +21,9 @@ typedef struct {
     char path[MYOS_FS_MAX_PATH];
 } userfs_handle;
 
-static userfs_handle handles[MYOS_FS_HANDLE_LIMIT];
+struct userfs_context {
+    userfs_handle handles[MYOS_FS_HANDLE_LIMIT];
+};
 
 static bool short_name_valid(const char *name, size_t length) {
     size_t base_length = 0;
@@ -123,27 +126,32 @@ static int64_t map_vfs_error(int error) {
     }
 }
 
-static userfs_handle *get_handle(uint64_t descriptor) {
+static userfs_handle *get_handle(userfs_context *context, uint64_t descriptor) {
     if (descriptor == 0U || descriptor > MYOS_FS_HANDLE_LIMIT) return NULL;
-    userfs_handle *handle = &handles[descriptor - 1U];
+    userfs_handle *handle = &context->handles[descriptor - 1U];
     return handle->in_use ? handle : NULL;
 }
 
-void userfs_initialize(void) {
-    memset(handles, 0, sizeof(handles));
+userfs_context *userfs_create_context(void) {
+    userfs_context *context = kmalloc(sizeof(*context));
+    if (context == NULL) return NULL;
+    memset(context, 0, sizeof(*context));
+    return context;
 }
 
-void userfs_close_all(void) {
+void userfs_destroy_context(userfs_context *context) {
+    if (context == NULL) return;
     for (size_t i = 0; i < MYOS_FS_HANDLE_LIMIT; ++i) {
-        if (handles[i].in_use) {
-            vfs_close(&handles[i].file);
-            memset(&handles[i], 0, sizeof(handles[i]));
+        if (context->handles[i].in_use) {
+            vfs_close(&context->handles[i].file);
+            memset(&context->handles[i], 0, sizeof(context->handles[i]));
         }
     }
+    kfree(context);
 }
 
-static int64_t syscall_open(uint64_t address_space, uint64_t user_path,
-                            uint64_t user_flags) {
+static int64_t syscall_open(userfs_context *context, uint64_t address_space,
+                            uint64_t user_path, uint64_t user_flags) {
     const uint32_t valid_flags = MYOS_FS_OPEN_READ | MYOS_FS_OPEN_WRITE |
                                  MYOS_FS_OPEN_CREATE | MYOS_FS_OPEN_TRUNCATE;
     if (user_flags > UINT32_MAX) return MYOS_FS_ERR_INVALID;
@@ -160,7 +168,7 @@ static int64_t syscall_open(uint64_t address_space, uint64_t user_path,
     if (path_rc != 0) return path_rc;
     size_t free_slot = MYOS_FS_HANDLE_LIMIT;
     for (size_t i = 0; i < MYOS_FS_HANDLE_LIMIT; ++i) {
-        if (!handles[i].in_use) {
+        if (!context->handles[i].in_use) {
             free_slot = i;
             break;
         }
@@ -192,18 +200,19 @@ static int64_t syscall_open(uint64_t address_space, uint64_t user_path,
         }
     }
 
-    handles[free_slot].in_use = true;
-    handles[free_slot].flags = flags;
-    handles[free_slot].offset = 0;
-    handles[free_slot].directory_index = 0;
-    handles[free_slot].file = file;
-    memcpy(handles[free_slot].path, path, strlen(path) + 1U);
+    context->handles[free_slot].in_use = true;
+    context->handles[free_slot].flags = flags;
+    context->handles[free_slot].offset = 0;
+    context->handles[free_slot].directory_index = 0;
+    context->handles[free_slot].file = file;
+    memcpy(context->handles[free_slot].path, path, strlen(path) + 1U);
     return (int64_t)(free_slot + 1U);
 }
 
-static int64_t syscall_read(uint64_t address_space, uint64_t descriptor,
-                            uint64_t user_buffer, uint64_t length) {
-    userfs_handle *handle = get_handle(descriptor);
+static int64_t syscall_read(userfs_context *context, uint64_t address_space,
+                            uint64_t descriptor, uint64_t user_buffer,
+                            uint64_t length) {
+    userfs_handle *handle = get_handle(context, descriptor);
     if (handle == NULL) return MYOS_FS_ERR_BAD_HANDLE;
     if ((handle->flags & MYOS_FS_OPEN_READ) == 0U) return MYOS_FS_ERR_OPERATION;
     if (length > MYOS_FS_MAX_TRANSFER) return MYOS_FS_ERR_LIMIT;
@@ -225,9 +234,10 @@ static int64_t syscall_read(uint64_t address_space, uint64_t descriptor,
     return (int64_t)got;
 }
 
-static int64_t syscall_write(uint64_t address_space, uint64_t descriptor,
-                             uint64_t user_buffer, uint64_t length) {
-    userfs_handle *handle = get_handle(descriptor);
+static int64_t syscall_write(userfs_context *context, uint64_t address_space,
+                             uint64_t descriptor, uint64_t user_buffer,
+                             uint64_t length) {
+    userfs_handle *handle = get_handle(context, descriptor);
     if (handle == NULL) return MYOS_FS_ERR_BAD_HANDLE;
     if ((handle->flags & MYOS_FS_OPEN_WRITE) == 0U) return MYOS_FS_ERR_OPERATION;
     if (length > MYOS_FS_MAX_TRANSFER) return MYOS_FS_ERR_LIMIT;
@@ -248,9 +258,9 @@ static int64_t syscall_write(uint64_t address_space, uint64_t descriptor,
     return (int64_t)written;
 }
 
-static int64_t syscall_readdir(uint64_t address_space, uint64_t descriptor,
-                               uint64_t user_entry) {
-    userfs_handle *handle = get_handle(descriptor);
+static int64_t syscall_readdir(userfs_context *context, uint64_t address_space,
+                               uint64_t descriptor, uint64_t user_entry) {
+    userfs_handle *handle = get_handle(context, descriptor);
     if (handle == NULL) return MYOS_FS_ERR_BAD_HANDLE;
     if (handle->file.type != VFS_TYPE_DIR) return MYOS_FS_ERR_NOT_DIRECTORY;
     if (handle->directory_index > INT32_MAX) return MYOS_FS_ERR_LIMIT;
@@ -274,8 +284,8 @@ static int64_t syscall_readdir(uint64_t address_space, uint64_t descriptor,
     return 1;
 }
 
-static int64_t syscall_close(uint64_t descriptor) {
-    userfs_handle *handle = get_handle(descriptor);
+static int64_t syscall_close(userfs_context *context, uint64_t descriptor) {
+    userfs_handle *handle = get_handle(context, descriptor);
     if (handle == NULL) return MYOS_FS_ERR_BAD_HANDLE;
     vfs_close(&handle->file);
     memset(handle, 0, sizeof(*handle));
@@ -297,25 +307,25 @@ static int64_t syscall_path_operation(uint64_t address_space, uint64_t user_path
     return rc == 0 ? 0 : map_vfs_error(rc);
 }
 
-bool userfs_handle_syscall(uint64_t number, uint64_t arg1, uint64_t arg2,
-                           uint64_t arg3, uint64_t address_space,
-                           int64_t *result) {
-    if (result == NULL) return false;
+bool userfs_handle_syscall(userfs_context *context, uint64_t number,
+                           uint64_t arg1, uint64_t arg2, uint64_t arg3,
+                           uint64_t address_space, int64_t *result) {
+    if (context == NULL || result == NULL) return false;
     switch (number) {
         case MYOS_SYS_FS_OPEN:
-            *result = syscall_open(address_space, arg1, arg2);
+            *result = syscall_open(context, address_space, arg1, arg2);
             return true;
         case MYOS_SYS_FS_READ:
-            *result = syscall_read(address_space, arg1, arg2, arg3);
+            *result = syscall_read(context, address_space, arg1, arg2, arg3);
             return true;
         case MYOS_SYS_FS_WRITE:
-            *result = syscall_write(address_space, arg1, arg2, arg3);
+            *result = syscall_write(context, address_space, arg1, arg2, arg3);
             return true;
         case MYOS_SYS_FS_READDIR:
-            *result = syscall_readdir(address_space, arg1, arg2);
+            *result = syscall_readdir(context, address_space, arg1, arg2);
             return true;
         case MYOS_SYS_FS_CLOSE:
-            *result = syscall_close(arg1);
+            *result = syscall_close(context, arg1);
             return true;
         case MYOS_SYS_FS_MKDIR:
             *result = syscall_path_operation(address_space, arg1, 1U);

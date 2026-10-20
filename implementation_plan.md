@@ -2,7 +2,7 @@
 
 ## Goal
 
-Track incremental development of the existing MyOS x86-64 kernel while preserving and reusing its PMM, VMM, IDT, panic, CLI, and Limine boot architecture. MyOS now has an initial **ring 3 userspace bring-up** and a QEMU-validated **AHCI persistent FAT32 test path** alongside its heap, diagnostics, block-device, VFS, and FAT32 infrastructure. MyBread and a general process/scheduler model remain future work.
+Track incremental development of the existing MyOS x86-64 kernel while preserving and reusing its PMM, VMM, IDT, panic, CLI, and Limine boot architecture. MyOS now has a bounded **Ring 3 process and round-robin scheduling foundation** and a QEMU-validated **AHCI persistent FAT32 test path** alongside its heap, diagnostics, block-device, VFS, and FAT32 infrastructure. MyBread and general filesystem-based process creation remain future work.
 
 ## Scope & Context
 
@@ -11,11 +11,11 @@ This is a freestanding C kernel (no libc, no POSIX, no C++ RTTI/exceptions). Its
 - **PMM** (`src/kernel/pmm.[ch]`) — bitmap-based physical page allocator, 4 KiB pages, returns physical addresses (`0` on OOM).
 - **VMM** (`src/kernel/vmm.[ch]`) — 4-level page tables (PML4→PDPT→PD→PT), page mapping and translation, user-page permissions/range validation, and private lower-half address spaces sharing supervisor-only kernel mappings.
 - **Panic** (`src/kernel/panic.[ch]`) — full-screen red Kernel Panic; `kernel_panic_exception()` and `kernel_panic_page_fault()` already exist. Page-fault path reads CR2 and shows fault address, raw error code, RIP, optional RSP — but does **not** decode the error-code bits nor dump general-purpose registers.
-- **IDT/ISR** (`src/arch/x86_64/idt.[ch]`, `isr.s`) — exception stubs push RAX–R15 then call `exception_handler_err(stack, vector)`; the CPU error frame sits at `stack + 15`. General registers are on the stack but currently discarded.
+- **IDT/ISR** (`src/arch/x86_64/idt.[ch]`, `isr.s`) — exception and timer stubs save resumable register frames; Ring 3 exceptions terminate the current task, Ring 0 exceptions use the panic path, and PIT ticks schedule only from user frames.
 - **CLI** — keyboard input is handled in `src/drivers/keyboard/keyboard.c`;
   command dispatch and VFS-backed file commands live in `src/shell/shell.c`.
 - **Build** — GNU Make + Clang + custom `linker.lds`; QEMU test via `make clean` / `make` / `make run` (headless serial output currently).
-- **Userspace** (`src/kernel/elf.c`, `src/kernel/usermode.c`, `src/arch/x86_64/gdt.c`, `src/arch/x86_64/usermode.s`) — GDT/TSS privilege transition, bounded ELF64 `ET_EXEC` loading, a four-page user stack, and the initial `/init` using `int 0x80`.
+- **Userspace** (`src/kernel/elf.c`, `src/kernel/process.c`, `src/kernel/usermode.c`, `src/arch/x86_64/gdt.c`, `src/arch/x86_64/usermode.s`) — GDT/TSS privilege transition, bounded ELF64 `ET_EXEC` loading, separate task address spaces/stacks, a PIT/PIC round-robin scheduler, and `/init` plus bundled child tests using `int 0x80`.
 
 ## Userspace bring-up — implemented foundation and limits
 
@@ -28,8 +28,9 @@ numbers are unchanged: console `WRITE=1`, `EXIT=2`, keyboard `READ=3`, and
 `CLEAR=4`. `WRITE` validates up to 256 bytes and writes to the framebuffer and
 COM1; `READ` validates a writable one-byte user buffer and blocks until a
 queued keyboard character is available; `CLEAR` takes no arguments; `EXIT`
-returns from `/init`. The wait enables interrupts and uses `hlt`, so it sleeps
-without a scheduler and only supports the single active process.
+returns from `/init` or records a child exit status. `READ` still waits inside
+kernel code; timer rescheduling from Ring 0 is deferred to a safe syscall
+return, so a task waiting for keyboard input can delay other runnable tasks.
 
 The added filesystem ABI uses IDs `FS_OPEN=5`, `FS_READ=6`, `FS_WRITE=7`,
 `FS_READDIR=8`, `FS_CLOSE=9`, `FS_MKDIR=10`, `FS_UNLINK=11`, and
@@ -43,7 +44,7 @@ for invalid buffers/arguments, paths, missing paths, type mismatches, existing
 paths, read-only storage, memory/space exhaustion, invalid handles, limits,
 I/O, unsupported operations, and non-empty directories.
 
-`src/kernel/userfs.c` owns a fixed 16-slot descriptor table. Descriptors are
+`src/kernel/userfs.c` provides a fixed 16-slot descriptor table per process. Descriptors are
 positive integers from 1 through 16, allocated from the first free slot;
 invalid and repeated closes fail, and all open objects are closed on process
 exit or user exception. `src/kernel/usercopy.c` reuses the VMM's per-page
@@ -53,8 +54,9 @@ copied through bounded kernel buffers, and paths are copied into a 256-byte
 kernel buffer before VFS calls. Paths must be NUL-terminated within that
 bound, are normalized relative to `/`, and reject `.`/`..`, empty names,
 non-8.3 FAT names, and unsupported characters. Repeated separators are
-collapsed. The single-process model prevents concurrent address-space changes
-during validation and copying.
+collapsed. Syscalls execute against the current task's address space and
+descriptor context; task switches occur only through saved Ring 3 interrupt
+or syscall-return frames.
 
 `/init` preserves `help`, `echo`, `clear`, `version`, and `exit`, and adds
 `ls [PATH]`, `cat PATH`, `touch PATH`, `write PATH TEXT`, `rm PATH`, and
@@ -98,8 +100,8 @@ and address-space reclamation; `/init` checks invalid syscall pointers in ring
 to a supervisor mapping terminates the process and returns to the kernel.
 Each process gets a separate PML4 with the kernel's supervisor-only upper-half
 mappings copied; private lower-half pages and page tables are reclaimed on
-exit. User exceptions terminate `/init` instead of entering the kernel panic
-handler.
+exit. User exceptions terminate only the faulting process instead of entering
+the kernel panic handler.
 
 `src/userspace/init.c` is linked as a static ELF and bundled as a Limine
 module. The kernel initializes the heap, block devices, VFS, and FAT32 root
@@ -128,12 +130,65 @@ fallback. These tests validate only the QEMU ICH9 setup; physical hardware,
 unsupported-sector devices, and forced timeout/error injection were not
 tested.
 
-There is no scheduler, general process creation, dynamic linker, argv/env
-setup, libc, seek, or general filesystem descriptor API. NX protection is
-enabled when supported by the CPU; processors without NX cannot enforce
-non-executable data pages. Physical hardware has not been tested. The older
-planning sections below describe other subsystems and future work; this
-current-state summary takes precedence where they disagree.
+There is no dynamic linker, argv/env setup, libc, seek, or general
+filesystem-based executable loader. NX protection is enabled when supported
+by the CPU; processors without NX cannot enforce non-executable data pages.
+Physical hardware has not been tested. The older planning sections below
+describe other subsystems and future work; this current-state summary takes
+precedence where they disagree.
+
+## Process management and scheduler — implemented foundation
+
+`src/kernel/process.c` owns a fixed eight-slot task table, including `/init`.
+Tasks move through free, ready, running, blocked, and zombie states. Each
+spawned child receives a unique PID, a 16 KiB kernel stack, a private ELF
+address space and user stack, and a private filesystem handle context. The
+VMM copies only supervisor-only kernel mappings into each new address space.
+The supported loader still accepts only validated static x86-64 ELF64
+`ET_EXEC` images.
+
+The existing PIC is configured to deliver IRQ0 and IRQ1, and the PIT is set
+to 100 Hz. On a Ring 3 timer frame, the ISR saves all general registers and
+lets the scheduler select the next ready task. Returning to a task switches
+CR3, updates TSS `RSP0`, and restores the saved register and `iretq` frame.
+Timer ticks received in Ring 0 request a reschedule but do not switch using a
+kernel interrupt frame; the next syscall return is the safe scheduling
+boundary. The scheduler is single-CPU. `WAIT` is the implemented blocking
+operation; the legacy keyboard `READ` remains a kernel wait and can hold the
+CPU until input is received.
+
+Child exit closes its filesystem context immediately and marks it
+unschedulable. The scheduler switches address spaces before destroying the
+child's user mappings. A parent that waited before exit reaps the child after
+the switch; otherwise the zombie remains until `WAIT`. Kernel stacks are
+retained until the task cannot be executing on them and are freed on safe
+reaping. The initial `/init` cannot exit while it still has live children.
+An exception in a child records `-(128 + vector)` and leaves other tasks
+runnable; Ring 0 exceptions continue to use the kernel panic path.
+
+The process ABI keeps the established syscall IDs unchanged and adds
+`SPAWN=13`, `WAIT=14`, `YIELD=15`, and `GETPID=16` in `src/abi/syscall.h`.
+`SPAWN` accepts the bundled `/boot/sched-a.elf`,
+`/boot/sched-b.elf`, and `/boot/sched-fault.elf` programs; a separate bundled
+malformed image is used to verify rejection. Filesystem executable loading,
+general argument vectors, and environment setup are not implemented. `WAIT`
+takes a child PID and an optional validated
+writable status pointer. `YIELD` requests a scheduling decision, and
+`GETPID` returns the current PID. The process table and resource limits return
+errors rather than exposing kernel objects to userspace.
+
+The `/init` `run` command is a regression harness. It checks invalid paths,
+malformed ELF rejection, invalid PIDs and output buffers, and syscall
+arguments; launches seven child processes to exercise the table limit; then
+waits and verifies each status. The two busy-loop programs verify distinct
+process IDs and private data and stack state. A third child executes `ud2` to
+verify that a user exception kills only that task. Three repeated QEMU test
+cycles showed alternating Ring 3 output from the busy-loop processes, all
+normal children exiting with status zero, the faulting process reporting
+exception 6/status `-134`, and all slots being reusable afterward. Existing
+userspace filesystem commands, the kernel-shell self-tests, and `/init`'s
+return to the kernel shell also passed in QEMU. These tests are not a formal
+memory-safety proof or physical-hardware validation.
 
 ## High-level approach
 

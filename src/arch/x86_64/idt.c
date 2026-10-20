@@ -1,12 +1,14 @@
 #include "idt.h"
 #include "io.h"
 #include "kernel/panic.h"
+#include "kernel/process.h"
 #include "kernel/usermode.h"
 
 static struct idt_entry idt[256];
 static struct idt_ptr idtr;
 
 extern void keyboard_isr_stub(void);
+extern void timer_isr_stub(void);
 extern void syscall_isr_stub(void);
 extern void isr0(void);
 extern void isr1(void);
@@ -92,11 +94,16 @@ static void pic_remap(void) {
     outb(0x21, 0x01); io_wait();
     outb(0xA1, 0x01); io_wait();
 
-    outb(0x21, 0xFD);
+    outb(0x21, 0xFC);
     outb(0xA1, 0xFF);
 }
 
-void exception_handler_noerr(uint64_t *stack, uint64_t vector) {
+uint64_t *timer_interrupt_handler(uint64_t *stack) {
+    outb(0x20, 0x20);
+    return process_timer_interrupt(stack);
+}
+
+uint64_t *exception_handler_noerr(uint64_t *stack, uint64_t vector) {
     const char *name = "Unknown Exception";
     uint64_t *cpu_frame = stack + 15;
     uint64_t error_code = 0;
@@ -107,16 +114,17 @@ void exception_handler_noerr(uint64_t *stack, uint64_t vector) {
     uint64_t ss = 0;
 
     if ((cpu_frame[1] & 3U) == 3U) {
-        user_process_fault(vector, rip, 0);
+        return user_process_fault(stack, vector, rip, 0U);
     }
     if (vector < 32) {
         name = exception_names[vector];
     }
 
     kernel_panic_exception(name, (uint8_t)vector, name, error_code, rip, cs, rflags, rsp, ss);
+    return NULL;
 }
 
-void exception_handler_err(uint64_t *stack, uint64_t vector) {
+uint64_t *exception_handler_err(uint64_t *stack, uint64_t vector) {
     const char *name = "Unknown Exception";
     uint64_t *cpu_frame = stack + 15;
     uint64_t error_code = cpu_frame[0];
@@ -128,7 +136,7 @@ void exception_handler_err(uint64_t *stack, uint64_t vector) {
     uint64_t fault_address = 0;
 
     if ((cs & 3U) == 3U) {
-        user_process_fault(vector, rip, error_code);
+        return user_process_fault(stack, vector, rip, error_code);
     }
     if (vector < 32) {
         name = exception_names[vector];
@@ -159,10 +167,11 @@ void exception_handler_err(uint64_t *stack, uint64_t vector) {
 
         kernel_panic_page_fault("Page Fault", (uint8_t)vector, name, error_code, fault_address,
                                 rip, cs, rflags, rsp, ss, &frame);
-        return;
+        return NULL;
     }
 
     kernel_panic_exception(name, (uint8_t)vector, name, error_code, rip, cs, rflags, rsp, ss);
+    return NULL;
 }
 
 void idt_init(void) {
@@ -199,10 +208,15 @@ void idt_init(void) {
     idt_set_gate(30, (uint64_t)isr30, cs, 0x8E);
     idt_set_gate(31, (uint64_t)isr31, cs, 0x8E);
     idt_set_gate(0x21, (uint64_t)keyboard_isr_stub, cs, 0x8E);
+    idt_set_gate(0x20, (uint64_t)timer_isr_stub, cs, 0x8E);
     idt_set_gate(0x80, (uint64_t)syscall_isr_stub, cs, 0xEE);
 
     __asm__ volatile ("lidt %0" : : "m"(idtr));
 
+    uint16_t divisor = (uint16_t)(1193182U / 100U);
+    outb(0x43, 0x36);
+    outb(0x40, (uint8_t)(divisor & 0xFFU));
+    outb(0x40, (uint8_t)(divisor >> 8));
     keyboard_init();
 
     __asm__ volatile ("sti");

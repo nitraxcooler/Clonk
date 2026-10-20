@@ -20,7 +20,8 @@ struct idt_ptr {
 
 void idt_init(void);
 void idt_set_gate(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags);
-void exception_handler_noerr(uint64_t *stack, uint64_t vector);
-void exception_handler_err(uint64_t *stack, uint64_t vector);
+uint64_t *exception_handler_noerr(uint64_t *stack, uint64_t vector);
+uint64_t *exception_handler_err(uint64_t *stack, uint64_t vector);
+uint64_t *timer_interrupt_handler(uint64_t *stack);
 
 #endif

@@ -1,6 +1,7 @@
 .extern keyboard_handler
 .extern exception_handler_noerr
 .extern exception_handler_err
+.extern timer_interrupt_handler
 
 .text
 .code64
@@ -46,6 +47,56 @@ keyboard_isr_stub:
 
     iretq
 
+.global timer_isr_stub
+timer_isr_stub:
+    push %rax
+    push %rbx
+    push %rcx
+    push %rdx
+    push %rsi
+    push %rdi
+    push %rbp
+    push %r8
+    push %r9
+    push %r10
+    push %r11
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+
+    mov %rsp, %r12
+    andq $-16, %rsp
+    mov %r12, %rdi
+    call timer_interrupt_handler
+    mov %rax, %rsp
+
+    testb $3, 128(%rsp)
+    jz 1f
+    mov $0x1b, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov %ax, %fs
+    mov %ax, %gs
+1:
+    pop %r15
+    pop %r14
+    pop %r13
+    pop %r12
+    pop %r11
+    pop %r10
+    pop %r9
+    pop %r8
+    pop %rbp
+    pop %rdi
+    pop %rsi
+    pop %rdx
+    pop %rcx
+    pop %rbx
+    pop %rax
+
+    iretq
+
 .macro ISR_NOERR vector
 .global isr\vector
 isr\vector:
@@ -69,9 +120,28 @@ isr\vector:
     mov %rsp, %r12
     andq $-16, %rsp
     call exception_handler_noerr
-    mov %r12, %rsp
-    hlt
-    jmp .
+    mov %rax, %rsp
+    mov $0x1b, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov %ax, %fs
+    mov %ax, %gs
+    pop %r15
+    pop %r14
+    pop %r13
+    pop %r12
+    pop %r11
+    pop %r10
+    pop %r9
+    pop %r8
+    pop %rbp
+    pop %rdi
+    pop %rsi
+    pop %rdx
+    pop %rcx
+    pop %rbx
+    pop %rax
+    iretq
 .endm
 
 .macro ISR_ERR vector
@@ -97,9 +167,28 @@ isr\vector:
     mov %rsp, %r12
     andq $-16, %rsp
     call exception_handler_err
-    mov %r12, %rsp
-    hlt
-    jmp .
+    mov %rax, %rsp
+    mov $0x1b, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov %ax, %fs
+    mov %ax, %gs
+    pop %r15
+    pop %r14
+    pop %r13
+    pop %r12
+    pop %r11
+    pop %r10
+    pop %r9
+    pop %r8
+    pop %rbp
+    pop %rdi
+    pop %rsi
+    pop %rdx
+    pop %rcx
+    pop %rbx
+    pop %rax
+    iretq
 .endm
 
 ISR_NOERR 0
