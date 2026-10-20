@@ -12,17 +12,15 @@ typedef struct fat32_fs {
     uint8_t   sectors_per_cluster;
     uint16_t  reserved_sectors;
     uint8_t   fat_count;
-    uint32_t  fat_size_sectors;    /* BPB_FATSz32                              */
-    uint32_t  root_cluster;          /* BPB_RootClus                             */
-    uint32_t  total_sectors;          /* BPB_TotSec32                             */
-    uint32_t  data_start_sector;    /* reserved + fat_count * fat_sectors */
-    uint32_t  cluster_bytes;            /* spc * bps */
+    uint32_t  fat_size_sectors;
+    uint32_t  root_cluster;
+    uint32_t  total_sectors;
+    uint32_t  data_start_sector;
+    uint32_t  cluster_bytes;
     uint8_t   valid;
-    uint32_t  next_cluster;         /* next allocation hint (write path)   */
+    uint32_t  next_cluster;
 } fat32_fs;
 
-/* Read the boot sector, check it's really FAT32, and fill in `fs`.
- * Returns 0 if it worked. */
 int fat32_mount(block_device *dev, fat32_fs *fs);
 
 extern struct vfs_fs_ops fat32_ops;

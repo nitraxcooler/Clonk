@@ -42,7 +42,6 @@ bool vm_user_range_writable(uint64_t pml4_physical_address, uint64_t address,
                             uint64_t length);
 bool vm_destroy_address_space(uint64_t pml4_physical_address);
 
-/* Map a physical address up into the higher-half so we can touch it. */
 uint64_t vm_phys_to_virt(uint64_t physical_address);
 
 uint64_t vm_get_mapped_pages(void);

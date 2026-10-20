@@ -1,10 +1,6 @@
-# Pick the right toolchain for the host.
-# MSYS2/clang64 on Windows gives us clean x86_64-elf objects; on Linux/WSL
-# the system cc/ld works fine (both target the same bare-metal ELF format).
+
 TARGET_TRIPLE = x86_64-elf
 
-# Careful: use "=" here, not "?=". GNU make already defaults CC=cc and LD=ld,
-# so "?=" would be a no-op and the Windows path would silently break.
 ifeq ($(OS),Windows_NT)
 CC = C:/msys64/clang64/bin/clang
 LD = C:/msys64/clang64/bin/ld.lld
@@ -35,10 +31,6 @@ endif
 QEMU_SERIAL ?= stdio
 QEMU_MONITOR ?= none
 
-# Base CFLAGS shared by every compiler.
-# The -mno-mmx/-mno-sse/-mno-80387 flags matter a lot: we never turn on
-# SSE in CR0/CR4, so if the compiler emits any SIMD instructions (say, for
-# a struct copy) the CPU will throw #UD and crash the kernel at runtime.
 CFLAGS = -Wall -Wextra -std=gnu11 -ffreestanding -fno-stack-protector \
          -fno-pie -fno-PIC -m64 -march=x86-64 -mno-red-zone -mcmodel=large \
          -mno-mmx -mno-sse -mno-sse2 -mno-80387 -msoft-float -I src
@@ -46,7 +38,6 @@ USER_CFLAGS = -Wall -Wextra -std=gnu11 -ffreestanding -fno-stack-protector \
               -fno-pie -m64 -march=x86-64 -mno-red-zone -mcmodel=small \
               -mno-mmx -mno-sse -mno-sse2 -mno-80387 -msoft-float -I src
 
-# Clang needs --target so it knows it's building bare-metal ELF for x86-64.
 ifneq ($(findstring clang,$(CC)),)
 CFLAGS += --target=$(TARGET_TRIPLE)
 endif
@@ -90,6 +81,11 @@ ISO_INIT = $(ISO_BOOT_DIR)/init.elf
 USER_INIT = $(BUILD_DIR)/userspace/init.elf
 FATIMG_SRC = tools/make_fat32_img.py
 FATIMG = $(BUILD_DIR)/fat32.img
+AHCI_TEST_IMAGE = $(BUILD_DIR)/ahci-test.img
+AHCI_TEST_SECTORS = 131072
+AHCI_ISO = $(BUILD_DIR)/myos-ahci.iso
+AHCI_ISO_STAGE_DIR = $(BUILD_DIR)/ahci_iso_root
+AHCI_ISO_CONFIG = $(AHCI_ISO_STAGE_DIR)/boot/limine.conf
 ISO_LIMINE_FILES = \
     $(ISO_BOOT_DIR)/limine-bios-cd.bin \
     $(ISO_BOOT_DIR)/limine-bios.sys \
@@ -132,6 +128,14 @@ $(FATIMG): $(FATIMG_SRC)
 	@mkdir -p $(BUILD_DIR)
 	$(PYTHON) $(FATIMG_SRC)
 
+$(AHCI_TEST_IMAGE):
+	@mkdir -p $(BUILD_DIR)
+	@if [ ! -f "$@" ]; then \
+	    $(PYTHON) $(FATIMG_SRC) --output "$@" --sectors $(AHCI_TEST_SECTORS) --ahci-test; \
+	else \
+	    echo "Preserving existing AHCI test disk: $@"; \
+	fi
+
 $(ISO_FATIMG): $(FATIMG)
 	@mkdir -p $(dir $@)
 	cp $< $@
@@ -164,16 +168,29 @@ $(ISO): $(ISO_KERNEL) $(ISO_CONFIG) $(ISO_FATIMG) $(ISO_INIT) $(ISO_LIMINE_FILES
 	    $(ISO_STAGE_DIR) -o $@
 	$(LIMINE_TOOL) bios-install $@
 
+$(AHCI_ISO_CONFIG): $(ISO) iso_root/boot/limine-ahci.conf iso_root/boot/ahci-root.flag
+	mkdir -p $(AHCI_ISO_STAGE_DIR)/boot
+	cp -r $(ISO_STAGE_DIR)/. $(AHCI_ISO_STAGE_DIR)/
+	cp iso_root/boot/limine-ahci.conf $@
+	cp iso_root/boot/ahci-root.flag $(AHCI_ISO_STAGE_DIR)/boot/ahci-root.flag
+
+$(AHCI_ISO): $(AHCI_ISO_CONFIG) $(LIMINE_TOOL)
+	mkdir -p $(dir $@)
+	xorriso -as mkisofs -b boot/limine-bios-cd.bin \
+	    -no-emul-boot -boot-load-size 4 -boot-info-table \
+	    --efi-boot boot/limine-uefi-cd.bin \
+	    -efi-boot-part --efi-boot-image --protective-msdos-label \
+	    $(AHCI_ISO_STAGE_DIR) -o $@
+	$(LIMINE_TOOL) bios-install $@
+
 run: $(ISO)
 	qemu-system-x86_64 -cdrom $(ISO) -display $(QEMU_DISPLAY) -serial $(QEMU_SERIAL) -monitor $(QEMU_MONITOR) -no-reboot
 
-# Run with the FAT32 test image attached as a SATA disk on QEMU's ICH9
-# AHCI controller (exercises the AHCI driver instead of the RAM disk).
-run-ahci: $(ISO)
-	qemu-system-x86_64 -cdrom $(ISO) -boot order=d -display $(QEMU_DISPLAY) -serial $(QEMU_SERIAL) -monitor $(QEMU_MONITOR) -no-reboot \
-	    -drive file=$(FATIMG),format=raw,if=none,id=disk0 \
-	    -device ich9-ahci,id=ahci \
-	    -device ide-hd,drive=disk0,bus=ahci.0
+run-ahci: $(AHCI_ISO) $(AHCI_TEST_IMAGE)
+	qemu-system-x86_64 -machine pc -cdrom $(AHCI_ISO) -boot order=d -display $(QEMU_DISPLAY) -serial $(QEMU_SERIAL) -monitor $(QEMU_MONITOR) -no-reboot \
+	    -drive file=$(AHCI_TEST_IMAGE),format=raw,if=none,id=ahci-test-disk,cache=writeback \
+	    -device ich9-ahci,id=ahci-test-controller \
+	    -device ide-hd,drive=ahci-test-disk,bus=ahci-test-controller.0
 
 clean:
 	rm -rf $(BUILD_DIR)

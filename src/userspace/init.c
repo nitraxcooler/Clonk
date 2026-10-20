@@ -137,10 +137,16 @@ static int64_t fs_unlink(const char *path) {
     return syscall2(MYOS_SYS_FS_UNLINK, (uint64_t)(uintptr_t)path, 0U);
 }
 
+static int64_t fs_rmdir(const char *path) {
+    return syscall2(MYOS_SYS_FS_RMDIR, (uint64_t)(uintptr_t)path, 0U);
+}
+
 static int filesystem_syscall_self_test(void) {
     static const char test_path[] = "/USRCHK.TMP";
     static const char missing_path[] = "/NOFILEZZ.TXT";
     static const char traversal_path[] = "/../USRCHK.TMP";
+    static const char test_directory[] = "/USRCHK.DIR";
+    static const char test_child[] = "/USRCHK.DIR/CHILD.TMP";
     static const char read_only_buffer[] = "ro";
     static const myos_fs_dirent read_only_entry;
     int64_t descriptors[MYOS_FS_HANDLE_LIMIT];
@@ -242,6 +248,16 @@ static int filesystem_syscall_self_test(void) {
         fs_open(test_path, MYOS_FS_OPEN_READ) != MYOS_FS_ERR_NOT_FOUND) {
         goto cleanup;
     }
+
+    if (fs_mkdir(test_directory) != 0) goto cleanup;
+    descriptor = fs_open(test_child, MYOS_FS_OPEN_WRITE | MYOS_FS_OPEN_CREATE);
+    if (descriptor <= 0 || fs_close((uint64_t)descriptor) != 0) goto cleanup;
+    descriptor = 0;
+    if (fs_rmdir(test_directory) != MYOS_FS_ERR_NOT_EMPTY ||
+        fs_unlink(test_child) != 0 ||
+        fs_rmdir(test_directory) != 0) {
+        goto cleanup;
+    }
     result = 0;
 
 cleanup:
@@ -250,7 +266,11 @@ cleanup:
     for (size_t i = 0; i < MYOS_FS_HANDLE_LIMIT; ++i) {
         if (descriptors[i] > 0) (void)fs_close((uint64_t)descriptors[i]);
     }
-    if (result != 0) (void)fs_unlink(test_path);
+    if (result != 0) {
+        (void)fs_unlink(test_path);
+        (void)fs_unlink(test_child);
+        (void)fs_rmdir(test_directory);
+    }
     return result;
 }
 
@@ -267,6 +287,7 @@ static void print_help(void) {
         "  write PATH TEXT  Replace a file with TEXT\n"
         "  rm PATH       Remove a file\n"
         "  mkdir PATH    Create a directory\n"
+        "  rmdir PATH    Remove an empty directory\n"
         "  exit          Return to the kernel shell\n";
     (void)write_text(help);
 }
@@ -298,6 +319,7 @@ static const char *filesystem_error_text(int64_t error) {
         case MYOS_FS_ERR_BAD_HANDLE: return "invalid descriptor";
         case MYOS_FS_ERR_LIMIT: return "resource or transfer limit reached";
         case MYOS_FS_ERR_IO: return "filesystem I/O error";
+        case MYOS_FS_ERR_NOT_EMPTY: return "directory is not empty";
         default: return "filesystem operation failed";
     }
 }
@@ -434,6 +456,17 @@ static void command_mkdir(const char *path) {
     (void)write_text("\n");
 }
 
+static void command_rmdir(const char *path) {
+    int64_t rc = fs_rmdir(path);
+    if (rc != 0) {
+        print_filesystem_error("rmdir", rc);
+        return;
+    }
+    (void)write_text("removed directory ");
+    (void)write_text(path);
+    (void)write_text("\n");
+}
+
 static void command_rm(const char *path) {
     int64_t rc = fs_unlink(path);
     if (rc != 0) {
@@ -480,7 +513,8 @@ static void run_command(char *line) {
     } else if (strings_equal(command, command_length, "cat") ||
                strings_equal(command, command_length, "touch") ||
                strings_equal(command, command_length, "rm") ||
-               strings_equal(command, command_length, "mkdir")) {
+               strings_equal(command, command_length, "mkdir") ||
+               strings_equal(command, command_length, "rmdir")) {
         char *cursor = arguments;
         char *path = next_token(&cursor);
         if (path == NULL || *cursor != '\0') {
@@ -491,6 +525,8 @@ static void run_command(char *line) {
             command_touch(path);
         } else if (strings_equal(command, command_length, "rm")) {
             command_rm(path);
+        } else if (strings_equal(command, command_length, "rmdir")) {
+            command_rmdir(path);
         } else {
             command_mkdir(path);
         }

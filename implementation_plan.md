@@ -2,7 +2,7 @@
 
 ## Goal
 
-Track incremental development of the existing MyOS x86-64 kernel while preserving and reusing its PMM, VMM, IDT, panic, CLI, and Limine boot architecture. MyOS now has an initial **ring 3 userspace bring-up** alongside the heap, diagnostics, block-device, VFS, and FAT32 infrastructure. MyBread and a general process/scheduler model remain future work.
+Track incremental development of the existing MyOS x86-64 kernel while preserving and reusing its PMM, VMM, IDT, panic, CLI, and Limine boot architecture. MyOS now has an initial **ring 3 userspace bring-up** and a QEMU-validated **AHCI persistent FAT32 test path** alongside its heap, diagnostics, block-device, VFS, and FAT32 infrastructure. MyBread and a general process/scheduler model remain future work.
 
 ## Scope & Context
 
@@ -32,7 +32,8 @@ returns from `/init`. The wait enables interrupts and uses `hlt`, so it sleeps
 without a scheduler and only supports the single active process.
 
 The added filesystem ABI uses IDs `FS_OPEN=5`, `FS_READ=6`, `FS_WRITE=7`,
-`FS_READDIR=8`, `FS_CLOSE=9`, `FS_MKDIR=10`, and `FS_UNLINK=11`. It exposes
+`FS_READDIR=8`, `FS_CLOSE=9`, `FS_MKDIR=10`, `FS_UNLINK=11`, and
+`FS_RMDIR=12`. It exposes
 opaque descriptors and bounded operations only; kernel-owned VFS objects and
 pointers never cross the boundary. `FS_READ` and `FS_WRITE` transfer at most
 512 bytes per call; reads return zero at EOF, and directory iteration returns
@@ -40,7 +41,7 @@ one entry or zero at end. Open flags distinguish read, write, create, and
 explicit truncation. Negative error codes are defined in the shared ABI header
 for invalid buffers/arguments, paths, missing paths, type mismatches, existing
 paths, read-only storage, memory/space exhaustion, invalid handles, limits,
-I/O, and unsupported operations.
+I/O, unsupported operations, and non-empty directories.
 
 `src/kernel/userfs.c` owns a fixed 16-slot descriptor table. Descriptors are
 positive integers from 1 through 16, allocated from the first free slot;
@@ -60,16 +61,28 @@ during validation and copying.
 `mkdir PATH`. `ls` defaults to `/`; `touch` creates a missing file without
 truncating an existing one; `write` creates if needed, explicitly truncates,
 then writes the remaining text while preserving spaces within it; `rm`
-removes files but rejects directories; `mkdir` requires an existing parent.
+removes files but rejects directories; `mkdir` requires an existing parent;
+`rmdir` removes only empty directories.
 The line buffer allows at most 511 characters. All commands use the syscall
 interface and mounted VFS rather than filesystem backend internals.
 
-The FAT32 root comes from the `ramdisk0` Limine module in the standard boot
-image (with device fallbacks during initialization). It is writable in memory
-but volatile: filesystem modifications do not survive reboot. The AHCI block
-path is read-only. The backend accepts 8.3 names, has a 32-bit file-size
-limit, and provides neither long filenames nor permissions. The syscall ABI
-does not yet expose metadata, seek, rename, or directory removal.
+The default FAT32 root comes from the `ramdisk0` Limine module and remains
+writable-in-memory but volatile. The separate `make run-ahci` configuration
+bundles a Limine marker and attaches only the generated 64 MiB
+`build/ahci-test.img` to QEMU's ICH9 AHCI controller. In this explicit mode,
+the kernel selects `sata0` as `/`, validates known sectors, and halts on a
+missing/unsupported device or failed test rather than falling back to RAM.
+The AHCI driver uses LBA48 DMA, physically allocated page-aligned buffers,
+one polled command slot, and ATA cache-flush commands after writes. It accepts
+512-byte logical sectors and requires a controller with 64-bit DMA; devices
+without a supported cache flush are read-only. The tested setup identified a
+64 MiB disk with 131072 sectors of 512 bytes. Its image persists across
+repeated `make run-ahci` boots and is recreated after `make clean`.
+
+The FAT32 backend accepts only 8.3 names, has a 32-bit file-size limit, and
+provides neither long filenames, permissions, journaling, nor crash recovery.
+AHCI writes are flushed individually, but multi-sector FAT updates are not
+transactional. The syscall ABI does not yet expose metadata, seek, or rename.
 
 The ELF loader checks ELF64/little-endian/x86-64 `ET_EXEC` headers, program
 header bounds, file/memory sizes, alignment, user virtual-address bounds, and
@@ -103,6 +116,17 @@ The kernel-shell `selftest` command passed PMM, VMM, and heap checks; the
 diagnostics. These checks do not constitute exhaustive security testing. A
 test-only `MYOS_TEST_SUPERVISOR_FAULT` build previously exercised termination
 on a user access to supervisor memory; normal builds do not trigger it.
+
+The AHCI QEMU path additionally verified reads of the FAT32 boot/FSInfo
+sectors and a known final-sector marker, invalid-range rejection, one- and
+two-sector write/read-back, cache flush, and restoration of reserved test
+sectors. A Ring 3 file was read through the kernel shell after creation,
+survived a QEMU stop and a new boot with the same image, and its file and
+empty-directory removal remained effective after another boot. Booting the
+AHCI-marked ISO without a controller halted explicitly without RAM-disk
+fallback. These tests validate only the QEMU ICH9 setup; physical hardware,
+unsupported-sector devices, and forced timeout/error injection were not
+tested.
 
 There is no scheduler, general process creation, dynamic linker, argv/env
 setup, libc, seek, or general filesystem descriptor API. NX protection is
@@ -493,7 +517,10 @@ MyBread:
 - `mbfmt` (format RAM disk), `mbmount`, `mkdir`, `create`, `write`, `read`, `list`, `delete`; corrupt a superblock magic to verify clean mount failure.
 - `fill` — full-disk exhaustion → graceful error, no corruption.
 
-QEMU specifics: the ISO is boot media only; RAM-backed block devices provide test storage. A real storage driver is out of scope (the block-device interface is designed to accept one later).
+QEMU specifics: the standard ISO uses the Limine RAM disk. A separate
+AHCI-marked ISO attaches only the generated disposable FAT32 test image to an
+ICH9 controller, selects it as the root, and refuses RAM-disk fallback.
+Physical SATA hardware and other controllers remain unvalidated.
 
 ## Implementation Order
 
@@ -511,7 +538,8 @@ QEMU specifics: the ISO is boot media only; RAM-backed block devices provide tes
 ## Deferred / Honest limitations
 
 - Long filenames: optional, only if time permits; default to clean 8.3 that can be extended (`docs/fat32.md`).
-- Real disk/media drivers (IDE/SATA/NVMe/AHCI): out of scope; the block-device interface is designed for a later driver to slot in.
+- Other physical storage/controller drivers and configurations beyond the
+  tested QEMU ICH9 AHCI setup remain deferred and unvalidated.
 - FAT32 multi-FAT mirroring write policy: reads always checked across copies; writes may update only a single copy in the first pass (documented).
 - Heap fragmentation: first-fit + forward/backward coalescing mitigates; a dedicated bump region is not implemented.
 - RSP on the page-fault screen is derived from the saved ISR frame (approximate); labels will be explicit so the value is not misleadingly presented as exact.

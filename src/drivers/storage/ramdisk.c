@@ -1,10 +1,3 @@
-/*
- * MyOS RAM-disk driver.
- *
- * A RAM disk is just a chunk of memory loaded by Limine as a module,
- * presented as a block device. Reads and writes are plain memcpy calls —
- * no hardware access is involved.
- */
 
 #include "kernel/blockdev.h"
 
@@ -18,7 +11,6 @@
 
 extern volatile struct limine_module_request limine_module_request;
 
-/* Serial helpers so RAM-disk init shows up in the boot log. */
 static inline void rd_putc(char c) { outb(0x3F8, (uint8_t)c); }
 static void rd_write(const char *s) { while (*s) rd_putc(*s++); }
 static void rd_hex64(uint64_t v) {
@@ -27,7 +19,6 @@ static void rd_hex64(uint64_t v) {
     for (int i = 15; i >= 0; --i) rd_putc(d[(v >> (i * 4)) & 0xF]);
 }
 
-/* Each RAM disk keeps its buffer and size here. */
 struct ramdisk_data {
     uint8_t *buffer;
     uint64_t  byte_size;
@@ -77,7 +68,34 @@ static int is_userspace_module(const char *path) {
     return 0;
 }
 
-/* Scan Limine modules and create a RAM disk for each one. */
+static int is_ahci_root_marker(const struct limine_file *file) {
+    if (file == NULL) return 0;
+    const char *string = file->string;
+    const char *expected = "myos.storage=ahci";
+    if (string != NULL) {
+        size_t i = 0;
+        while (string[i] != '\0' && expected[i] != '\0' &&
+               string[i] == expected[i]) {
+            ++i;
+        }
+        if (string[i] == '\0' && expected[i] == '\0') return 1;
+    }
+
+    const char *path = file->path;
+    const char *suffix = "ahci-root.flag";
+    if (path == NULL) return 0;
+    size_t path_length = 0;
+    size_t suffix_length = 0;
+    while (path[path_length] != '\0') ++path_length;
+    while (suffix[suffix_length] != '\0') ++suffix_length;
+    if (suffix_length > path_length) return 0;
+    size_t offset = path_length - suffix_length;
+    for (size_t i = 0; i < suffix_length; ++i) {
+        if (path[offset + i] != suffix[i]) return 0;
+    }
+    return 1;
+}
+
 void ramdisk_init(void) {
     if (limine_module_request.response == NULL) {
         rd_write("RAMDISK: no module response\n");
@@ -98,7 +116,8 @@ void ramdisk_init(void) {
             rd_write("RAMDISK: module NULL or empty\n");
             continue;
         }
-        if (is_userspace_module(file->path) || is_userspace_module(file->string)) {
+        if (is_userspace_module(file->path) || is_userspace_module(file->string) ||
+            is_ahci_root_marker(file)) {
             continue;
         }
 
@@ -109,7 +128,7 @@ void ramdisk_init(void) {
         struct ramdisk_data *rd = kmalloc(sizeof(struct ramdisk_data));
 
         if (dev == NULL || rd == NULL) {
-            /* No memory for bookkeeping — skip this module. */
+
             continue;
         }
 
@@ -122,10 +141,9 @@ void ramdisk_init(void) {
         dev->dev_data     = rd;
         dev->read         = ramdisk_read;
         dev->write        = ramdisk_write;
+        dev->flush        = NULL;
         dev->next         = NULL;
 
-        /* Registration fails only on a duplicate name, which can't
-         * happen here; if it does, we just move on. */
         blockdev_register(dev);
     }
 }

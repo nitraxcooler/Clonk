@@ -25,7 +25,8 @@ to its kernel shell. Its version command reports **v0.1.1**.
 - Persistent `/init` interactive userspace shell
 - Block-device registry, Limine-module-backed RAM disk, VFS, and FAT32
   filesystem operations
-- PCI configuration-space enumeration and a read-only AHCI SATA path
+- PCI enumeration and an AHCI SATA driver with bounded LBA48 DMA reads,
+  writes, and cache flushes for supported 512-byte-sector devices
 - PS/2 keyboard input and a custom 8x16 bitmap font for framebuffer text
 - QEMU build and test workflow
 
@@ -60,6 +61,7 @@ kernel VFS; the kernel remains responsible for filesystem access.
 | `write <path> <text>` | Create a file if needed and write from its beginning |
 | `rm <path>` | Remove a file |
 | `mkdir <path>` | Create a directory |
+| `rmdir <path>` | Remove an empty directory |
 
 Kernel-shell input supports basic character entry and Backspace editing. Its
 command tokenizer splits arguments on whitespace; `write` rejoins text
@@ -84,6 +86,7 @@ display.
 | `write PATH TEXT` | Create or truncate a file, then write `TEXT` |
 | `rm PATH` | Remove a file; directories are rejected |
 | `mkdir PATH` | Create a directory |
+| `rmdir PATH` | Remove an empty directory |
 
 For `write`, the first whitespace-delimited argument is the path and the
 remaining text, including spaces, is written to the file. Other path-taking
@@ -93,9 +96,9 @@ commands accept one path argument. The interactive input line is limited to
 The userspace syscall ABI is defined in [`src/abi/syscall.h`](src/abi/syscall.h).
 The existing syscall IDs remain `WRITE=1`, `EXIT=2`, `READ=3`, and `CLEAR=4`.
 Filesystem calls use IDs `FS_OPEN=5`, `FS_READ=6`, `FS_WRITE=7`,
-`FS_READDIR=8`, `FS_CLOSE=9`, `FS_MKDIR=10`, and `FS_UNLINK=11`. The ID is
-passed in `RAX`, arguments in `RDI`, `RSI`, and `RDX`, and a signed result is
-returned in `RAX`.
+`FS_READDIR=8`, `FS_CLOSE=9`, `FS_MKDIR=10`, `FS_UNLINK=11`, and
+`FS_RMDIR=12`. The ID is passed in `RAX`, arguments in `RDI`, `RSI`, and
+`RDX`, and a signed result is returned in `RAX`.
 
 | Existing call | Arguments | Result |
 | --- | --- | --- |
@@ -113,6 +116,7 @@ returned in `RAX`.
 | `FS_CLOSE` | `RDI=fd` | `0` on success |
 | `FS_MKDIR` | `RDI=path` | `0` on success |
 | `FS_UNLINK` | `RDI=path` | `0` on success |
+| `FS_RMDIR` | `RDI=path` | `0` on success; non-empty directories are rejected |
 
 `FS_OPEN` flags are `READ=0x1`, `WRITE=0x2`, `CREATE=0x4`, and
 `TRUNCATE=0x8`. At least one access flag is required; create and truncate
@@ -132,10 +136,10 @@ Filesystem errors are negative values defined by the shared ABI: invalid
 arguments/buffers (`-1`), invalid paths (`-2`), not found (`-3`), not a
 directory (`-4`), is a directory (`-5`), already exists (`-6`), read-only
 (`-7`), out of memory (`-8`), no space (`-9`), invalid descriptor (`-10`),
-resource/transfer limit (`-11`), I/O (`-12`), and unsupported or failed
-operation (`-13`). Handles close on explicit close, userspace exit, or user
-exception. These checks reduce accidental invalid accesses; they are not a
-formal security proof.
+resource/transfer limit (`-11`), I/O (`-12`), unsupported or failed operation
+(`-13`), and non-empty directory (`-14`). Handles close on explicit close,
+userspace exit, or user exception. These checks reduce accidental invalid
+accesses; they are not a formal security proof.
 
 The kernel routes keyboard characters to `/init` through a bounded
 kernel-owned queue while userspace is active. The current input translator
@@ -155,7 +159,7 @@ Ring 3 shell
     -> VFS
     -> mounted FAT32 filesystem
     -> block-device layer
-    -> Limine RAM-disk image
+    -> Limine RAM disk by default, or SATA only in explicit AHCI test mode
 ```
 
 The userspace shell parses commands and supplies paths, flags, and data. The
@@ -163,8 +167,8 @@ kernel validates and copies syscall inputs, owns the open VFS objects, and
 calls the VFS; userspace cannot access filesystem-private pointers or bypass
 the mounted namespace.
 
-- **Block devices:** a small registry provides checked sector read/write
-  interfaces for registered devices.
+- **Block devices:** a small registry provides checked sector read/write and
+  optional flush interfaces for registered devices.
 - **RAM disk:** Limine-loaded modules are exposed as memory-backed block
   devices. The standard boot image's FAT32 image is writable in memory, but
   changes are volatile and lost on reboot.
@@ -175,16 +179,34 @@ the mounted namespace.
   operations, but names use the FAT 8.3 format. The on-disk file-size field is
   32-bit; long filenames and filesystem permissions are not implemented.
   The VFS has metadata lookup, but no metadata syscall is provided to
-  userspace; `FS_UNLINK` removes files and rejects directories.
-- **PCI/AHCI:** PCI configuration-space enumeration and an AHCI SATA driver
-  with DMA sector reads are present. The AHCI block device is read-only. The
-  optional `make run-ahci` target attaches a FAT32 test image through QEMU's
-  ICH9 AHCI controller; this is a test path, not writable persistent storage.
+  userspace. `FS_UNLINK` removes files; `FS_RMDIR` removes only empty
+  directories.
+- **PCI/AHCI:** the driver discovers PCI AHCI controllers, identifies ATA
+  disks, and performs bounded LBA48 DMA reads and writes using page-aligned
+  physical bounce buffers. It accepts 512-byte logical sectors and requires
+  64-bit DMA support. Writes are exposed only when the disk advertises an ATA
+  cache-flush command; each completed write is flushed. The driver uses one
+  command slot and polling, and does not support NCQ, ATAPI, hot-plug, or
+  arbitrary controller/device configurations.
 
-The standard root mount prefers the Limine `ramdisk0` image. If a SATA device
-is available, boot also attempts to mount it separately at `/sata` for
-verification. Userspace and kernel-shell filesystem commands use the mounted
-VFS rather than calling the FAT32 implementation directly.
+The standard root remains the Limine `ramdisk0` image, so ordinary
+`make run` behavior is unchanged and its filesystem changes are volatile.
+`make run-ahci` builds a separate boot ISO and uses the dedicated
+`build/ahci-test.img` 64 MiB FAT32 image on QEMU's ICH9 AHCI controller. Its
+Limine marker makes the kernel select `sata0` as `/`; if that disk is missing,
+unsupported, or fails validation, boot halts instead of falling back to the
+RAM disk. The AHCI image is created only when absent and is preserved across
+repeated `make run-ahci` boots. `make clean` removes it along with the build
+directory, so do not clean between persistence-test boots.
+
+The AHCI boot performs known-content reads at the beginning and final LBA,
+multi-sector and invalid-range checks, then saves, writes, verifies, and
+restores reserved sectors 8-9. The filesystem, VFS, kernel shell, and
+userspace syscalls are shared with the RAM-disk path. FAT32 has no journal or
+transactional multi-sector updates: cache flushes make completed device
+writes persistent, but do not guarantee filesystem consistency after an
+unexpected power loss. Names remain limited to 8.3, so the persistence test
+uses short names rather than `persist-test`.
 
 ## Screenshots
 
@@ -269,11 +291,13 @@ controller:
 make run-ahci
 ```
 
-This target exercises the optional read-only AHCI storage path. Availability
-and successful operation depend on the QEMU environment; no physical-hardware
-compatibility is implied. The ISO is constructed with Limine BIOS and EFI
-boot components, but firmware-specific and physical-hardware behavior should
-be tested separately.
+This target runs the explicit persistent-storage test configuration. It
+preserves `build/ahci-test.img` between runs; to start with a fresh disposable
+volume, remove that specific image or run `make clean` before rebuilding.
+No host or other disk is attached by the target; this generated image is the
+only virtual SATA disk. The ISO is constructed with Limine BIOS and EFI boot
+components, but firmware-specific and physical-hardware behavior should be
+tested separately.
 
 ## Development Philosophy
 
@@ -321,8 +345,17 @@ After the handoff, kernel-shell `help`, `ls`, `cat`, `blkinfo`, and
 `pfault` emitted their expected diagnostics. Invalid userspace pointers,
 cross-page buffers, read-only destinations, transfer and path limits,
 invalid descriptors, and descriptor exhaustion are also covered by boot-time
-or QEMU checks. The standard QEMU run reported no AHCI controller; AHCI and
-physical hardware were not validated in this test run.
+or QEMU checks. The standard RAM-disk boot reported no AHCI controller and
+completed its userspace filesystem self-test. In the separate AHCI
+configuration, QEMU identified the ICH9 controller and 64 MiB `sata0` disk,
+verified known sector contents and read/write bounds, and passed single- and
+multi-sector write/read-back tests. A Ring 3-created marker file was read
+back through the kernel shell, survived a QEMU shutdown and a new boot using
+the same image, and its file/directory deletion remained effective after
+another boot. A no-controller run halted with an explicit error and did not
+launch userspace or fall back to the RAM disk. These results validate only
+the tested QEMU configuration; physical hardware, unsupported sector sizes,
+injected ATA timeouts, and crash recovery were not tested.
 
 ## Roadmap
 
@@ -340,7 +373,9 @@ physical hardware were not validated in this test run.
 - Static ELF64 `/init` loader and persistent userspace shell
 - Validated console, keyboard, exit, and filesystem syscall paths
 - Userspace filesystem commands for listing, reading, creating, writing,
-  removing files, and making directories
+  removing files, and making/removing empty directories
+- QEMU AHCI sector writes/flushes and persistent FAT32 testing with a
+  dedicated virtual SATA image
 - QEMU checks for kernel self-tests, userspace filesystem operations,
   invalid syscall inputs, descriptor limits, and return to the kernel shell
 
@@ -353,7 +388,7 @@ physical hardware were not validated in this test run.
 
 - Scheduler and multiple runnable processes
 - General process creation and lifecycle management
-- Writable persistent storage drivers and broader hardware support
+- Broader storage-driver and hardware support beyond the tested QEMU AHCI path
 - Additional userspace programs and runtime support
 - Networking and audio
 - MyGUI graphical desktop environment
@@ -365,9 +400,13 @@ libc, or argv/environment setup. The ELF loader supports a bounded static
 ELF64 `ET_EXEC` subset, not dynamically linked executables. User exceptions
 terminate `/init`; kernel exceptions retain the kernel panic path. The
 standard writable root is a volatile FAT32 image loaded as a Limine module.
-AHCI currently provides a read-only block path. FAT32 uses 8.3 filenames and
-does not implement permissions or long filenames. Physical hardware and
-firmware variants have not been fully validated.
+The optional AHCI root is validated only with QEMU's ICH9 controller and a
+512-byte-sector test disk; it uses polling and one command slot, and lacks
+NCQ, ATAPI, and hot-plug support. FAT32 uses 8.3 filenames and does not
+implement permissions, long filenames, journaling, or crash recovery.
+Unexpected power loss may leave filesystem metadata inconsistent despite
+device cache flushes. Physical hardware and firmware variants have not been
+validated.
 
 ## Kernel Panic
 

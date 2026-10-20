@@ -1,10 +1,3 @@
-/*
- * MyOS Virtual Filesystem — mount table and dispatch.
- *
- * The VFS keeps a list of mounted filesystems and routes API calls to
- * the filesystem whose mount point best matches the path. It doesn't
- * know anything about FAT32 or any other filesystem itself.
- */
 
 #include "fs/vfs.h"
 
@@ -33,7 +26,6 @@ int vfs_do_mount(const char *mount_point, const char *fs_name,
         return -1;
     }
 
-    /* Don't allow the same mount point twice. */
     for (int i = 0; i < VFS_MAX_MOUNTS; ++i) {
         if (vfs_mounts[i].in_use &&
             strcmp(vfs_mounts[i].path, mount_point) == 0) {
@@ -52,7 +44,7 @@ int vfs_do_mount(const char *mount_point, const char *fs_name,
             return 0;
         }
     }
-    return -1; /* no free slot in the mount table */
+    return -1;
 }
 
 int vfs_unmount(const char *mount_point) {
@@ -83,8 +75,6 @@ vfs_mount *vfs_find_mount(const char *path) {
         }
         size_t mlen = strlen(vfs_mounts[i].path);
 
-        /* Match if path equals mountpoint or path continues with '/'.
-         * The root mount ("/") matches every absolute path. */
         if (strncmp(path, vfs_mounts[i].path, mlen) == 0 &&
             (mlen == 1 || path[mlen] == '\0' || path[mlen] == '/')) {
             if (mlen >= best_len) {
@@ -217,4 +207,15 @@ int vfs_mkdir(const char *path) {
         return VFS_ERR_OPERATION;
     }
     return m->ops.mkdir(m, vfs_relative_path(m, path));
+}
+
+int vfs_rmdir(const char *path) {
+    if (path == NULL) {
+        return VFS_ERR_INVALID;
+    }
+    vfs_mount *m = vfs_find_mount(path);
+    if (m == NULL || m->ops.rmdir == NULL) {
+        return VFS_ERR_OPERATION;
+    }
+    return m->ops.rmdir(m, vfs_relative_path(m, path));
 }

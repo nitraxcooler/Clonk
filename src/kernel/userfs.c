@@ -118,6 +118,7 @@ static int64_t map_vfs_error(int error) {
         case VFS_ERR_NO_SPACE: return MYOS_FS_ERR_NO_SPACE;
         case VFS_ERR_LIMIT: return MYOS_FS_ERR_LIMIT;
         case VFS_ERR_IO: return MYOS_FS_ERR_IO;
+        case VFS_ERR_NOT_EMPTY: return MYOS_FS_ERR_NOT_EMPTY;
         default: return MYOS_FS_ERR_OPERATION;
     }
 }
@@ -282,11 +283,17 @@ static int64_t syscall_close(uint64_t descriptor) {
 }
 
 static int64_t syscall_path_operation(uint64_t address_space, uint64_t user_path,
-                                      bool make_directory) {
+                                      unsigned int operation) {
     char path[MYOS_FS_MAX_PATH];
     int rc = copy_user_path(address_space, user_path, path);
     if (rc != 0) return rc;
-    rc = make_directory ? vfs_mkdir(path) : vfs_unlink(path);
+    if (operation == 0U) {
+        rc = vfs_unlink(path);
+    } else if (operation == 1U) {
+        rc = vfs_mkdir(path);
+    } else {
+        rc = vfs_rmdir(path);
+    }
     return rc == 0 ? 0 : map_vfs_error(rc);
 }
 
@@ -311,10 +318,13 @@ bool userfs_handle_syscall(uint64_t number, uint64_t arg1, uint64_t arg2,
             *result = syscall_close(arg1);
             return true;
         case MYOS_SYS_FS_MKDIR:
-            *result = syscall_path_operation(address_space, arg1, true);
+            *result = syscall_path_operation(address_space, arg1, 1U);
             return true;
         case MYOS_SYS_FS_UNLINK:
-            *result = syscall_path_operation(address_space, arg1, false);
+            *result = syscall_path_operation(address_space, arg1, 0U);
+            return true;
+        case MYOS_SYS_FS_RMDIR:
+            *result = syscall_path_operation(address_space, arg1, 2U);
             return true;
         default:
             return false;

@@ -3,10 +3,6 @@
 
 #include <stdint.h>
 
-/*
- * int 0x80 ABI: number in RAX, arguments in RDI/RSI/RDX, signed result in
- * RAX. All other general-purpose registers are preserved by the entry stub.
- */
 #define MYOS_SYS_WRITE 1
 #define MYOS_SYS_EXIT  2
 #define MYOS_SYS_READ  3
@@ -19,6 +15,7 @@
 #define MYOS_SYS_FS_CLOSE  9
 #define MYOS_SYS_FS_MKDIR  10
 #define MYOS_SYS_FS_UNLINK 11
+#define MYOS_SYS_FS_RMDIR  12
 
 #define MYOS_FS_OPEN_READ      0x01U
 #define MYOS_FS_OPEN_WRITE     0x02U
@@ -38,7 +35,6 @@ typedef struct myos_fs_dirent {
     uint32_t type;
 } myos_fs_dirent;
 
-/* Negative filesystem syscall results. */
 #define MYOS_FS_ERR_INVALID       (-1)
 #define MYOS_FS_ERR_PATH          (-2)
 #define MYOS_FS_ERR_NOT_FOUND     (-3)
@@ -52,12 +48,6 @@ typedef struct myos_fs_dirent {
 #define MYOS_FS_ERR_LIMIT         (-11)
 #define MYOS_FS_ERR_IO            (-12)
 #define MYOS_FS_ERR_OPERATION     (-13)
-
-/*
- * FS_OPEN(path, flags) returns an opaque positive descriptor. CREATE opens an
- * existing file or creates a missing one; TRUNCATE explicitly empties it.
- * FS_READ/FS_WRITE return transferred bytes, with read returning 0 at EOF.
- * FS_READDIR returns 1 for an entry, 0 at end, or a negative error.
- */
+#define MYOS_FS_ERR_NOT_EMPTY     (-14)
 
 #endif

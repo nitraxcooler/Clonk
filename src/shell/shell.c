@@ -1,12 +1,3 @@
-/*
- * MyOS shell.
- *
- * Takes whatever the user typed, splits it into words, and hands it to
- * the right kernel function. We keep the shell dumb on purpose — it
- * never pokes at kernel internals directly, it just asks for things.
- * Some commands (like the page-fault test) are deliberately dangerous
- * and end in a kernel panic. That's the point.
- */
 
 #include "shell.h"
 
@@ -133,6 +124,7 @@ static void cmd_help(void) {
         "  write    - Write text to a file (write /f.txt hello)",
         "  rm       - Delete a file",
         "  mkdir    - Create a directory",
+        "  rmdir    - Remove an empty directory",
         NULL
     };
     kprint("Available commands:\n", SHELL_COL_HEAD);
@@ -222,7 +214,7 @@ static void cmd_pfault(void) {
     kprint("Triggering deliberate page fault...\n", SHELL_COL_HEAD);
     volatile uint8_t *bad = (volatile uint8_t *)0x10;
     (void)*bad;
-    /* If we got here, the fault didn't fire. That'd be a bug. */
+
     kprint("ERROR: page fault was not triggered.\n", SHELL_COL_ERR);
 }
 
@@ -325,7 +317,6 @@ static void cmd_cat(const char *path) {
     vfs_close(&f);
 }
 
-/* `touch` — make an empty file. */
 static void cmd_touch(const char *path) {
     if (vfs_create(path) != 0) {
         kprint("touch: cannot create: ", SHELL_COL_ERR);
@@ -338,11 +329,10 @@ static void cmd_touch(const char *path) {
     kprint("\n", SHELL_TOK_WHITE);
 }
 
-/* `write` — write a string into a file, starting at the beginning. */
 static void cmd_write(const char *path, const char *text) {
     vfs_file f;
     if (vfs_open(path, &f) != 0) {
-        /* If it doesn't exist yet, just create it like a shell would. */
+
         if (vfs_create(path) != 0 || vfs_open(path, &f) != 0) {
             kprint("write: cannot open: ", SHELL_COL_ERR);
             kprint(path, SHELL_COL_ERR);
@@ -376,7 +366,6 @@ static void cmd_write(const char *path, const char *text) {
     kprint("\n", SHELL_TOK_WHITE);
 }
 
-/* `rm` — delete a file. */
 static void cmd_rm(const char *path) {
     if (vfs_unlink(path) != 0) {
         kprint("rm: cannot remove: ", SHELL_COL_ERR);
@@ -389,7 +378,6 @@ static void cmd_rm(const char *path) {
     kprint("\n", SHELL_TOK_WHITE);
 }
 
-/* `mkdir` — make a new directory. */
 static void cmd_mkdir(const char *path) {
     if (vfs_mkdir(path) != 0) {
         kprint("mkdir: cannot create: ", SHELL_COL_ERR);
@@ -398,6 +386,18 @@ static void cmd_mkdir(const char *path) {
         return;
     }
     kprint("created dir ", SHELL_COL_OK);
+    kprint(path, SHELL_TOK_WHITE);
+    kprint("\n", SHELL_TOK_WHITE);
+}
+
+static void cmd_rmdir(const char *path) {
+    if (vfs_rmdir(path) != 0) {
+        kprint("rmdir: cannot remove: ", SHELL_COL_ERR);
+        kprint(path, SHELL_COL_ERR);
+        kprint("\n", SHELL_COL_ERR);
+        return;
+    }
+    kprint("removed directory ", SHELL_COL_OK);
     kprint(path, SHELL_TOK_WHITE);
     kprint("\n", SHELL_TOK_WHITE);
 }
@@ -465,6 +465,9 @@ void shell_handle_command(const char *cmdline) {
     } else if (strcmp(cmd, "mkdir") == 0) {
         if (n >= 2) cmd_mkdir(tok(1));
         else kprint("Usage: mkdir <path>\n", SHELL_COL_ERR);
+    } else if (strcmp(cmd, "rmdir") == 0) {
+        if (n >= 2) cmd_rmdir(tok(1));
+        else kprint("Usage: rmdir <path>\n", SHELL_COL_ERR);
     } else {
         kprint("Unknown command: ", SHELL_COL_ERR);
         kprint(cmd, SHELL_COL_ERR);

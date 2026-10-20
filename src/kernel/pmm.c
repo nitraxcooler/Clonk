@@ -111,7 +111,6 @@ static void pmm_mark_region_used(uint64_t base, uint64_t length) {
     pmm_mark_range(base, length, true);
 }
 
-/* Find a usable memory region big enough to hold the page bitmap. */
 static uint64_t pmm_find_bitmap_location(uint64_t kernel_start_phys, uint64_t kernel_end_phys) {
     if (limine_memmap_request.response == NULL) {
         kernel_panic("PMM memory map unavailable");
@@ -200,7 +199,6 @@ void pmm_init(void) {
         kernel_panic("PMM found no usable pages");
     }
 
-    /* One bit per page: total_pages bits, rounded up to whole bytes. */
     pmm_bitmap_bytes = (pmm_total_pages + 7U) / 8U;
     pmm_bitmap_pages = align_up(pmm_bitmap_bytes, PAGE_SIZE) / PAGE_SIZE;
 
@@ -211,7 +209,6 @@ void pmm_init(void) {
     pmm_free_pages = 0;
     pmm_used_pages = 0;
 
-    /* Start with every page marked used, then free the usable regions. */
     for (uint64_t page_index = 0; page_index < pmm_total_pages; ++page_index) {
         pmm_set_bit(page_index, true);
     }
@@ -226,7 +223,6 @@ void pmm_init(void) {
         }
     }
 
-    /* Protect the first page, the kernel image, and the bitmap itself. */
     pmm_mark_region_used(0, PAGE_SIZE);
     pmm_mark_region_used(kernel_start_phys, kernel_length);
     pmm_mark_region_used(bitmap_base, bitmap_size_bytes);
@@ -247,7 +243,6 @@ uint64_t pmm_alloc_page(void) {
         kernel_panic("PMM used before initialization");
     }
 
-    /* Skip page 0: the first page is always reserved. */
     for (uint64_t page_index = 1; page_index < pmm_total_pages; ++page_index) {
         if (!pmm_get_bit(page_index)) {
             pmm_set_bit(page_index, true);

@@ -1,10 +1,3 @@
-/*
- * MyOS PCI configuration-space driver.
- *
- * Implements the legacy (non-ECAM) configuration mechanism on the two
- * standard I/O ports.  All accesses are 32-bit aligned dword operations,
- * so the code happily works for both real hardware and QEMU.
- */
 
 #include "drivers/pci/pci.h"
 
@@ -15,7 +8,7 @@
 
 #define PCI_CONFIG_ADDRESS  0xCF8
 #define PCI_CONFIG_DATA     0xCFC
-#define PCI_CONFIG_ENABLE   0x80000000UL   /* bit 31 enables config mode */
+#define PCI_CONFIG_ENABLE   0x80000000UL
 
 static uint32_t pci_make_address(uint8_t bus, uint8_t device,
                                  uint8_t function, uint8_t offset) {
@@ -52,15 +45,13 @@ int pci_find_by_class(uint8_t base_class, uint8_t subclass, uint8_t prog_if,
             for (uint8_t f = 0; f < 8; ++f) {
                 uint32_t id = pci_config_read_dword(b, d, f, PCI_OFFSET_VENDOR);
                 if (id == 0xFFFFFFFFU || (id & 0xFFFF) == 0xFFFFU) {
-                    /* No device here; function 0 of an empty slot means the
-                     * higher functions are empty too. */
+
                     if (f == 0) break;
                     continue;
                 }
 
                 uint32_t class_dw = pci_config_read_dword(b, d, f, 0x08);
-                /* Little-endian: 0x08=revision, 0x09=prog_if,
-                 * 0x0A=subclass, 0x0B=base class. */
+
                 uint8_t base     = (uint8_t)((class_dw >> 24) & 0xFF);
                 uint8_t subclass_ = (uint8_t)((class_dw >> 16) & 0xFF);
                 uint8_t prog_if_  = (uint8_t)((class_dw >> 8) & 0xFF);
@@ -87,12 +78,11 @@ int pci_bar_info(uint8_t bus, uint8_t device, uint8_t function,
     uint8_t offset = PCI_OFFSET_BAR0 + bar_index * 4;
     uint32_t bar = pci_config_read_dword(bus, device, function, offset);
 
-    /* BAR absent or an I/O-space BAR — not usable as a memory region. */
     if (bar == 0 || (bar & 0x1) != 0) {
         return -1;
     }
 
-    int is64 = ((bar & 0x6) == 0x6);   /* type field 0b11 = 64-bit memory */
+    int is64 = ((bar & 0x6) == 0x6);
     *address = (uint64_t)(bar & ~0xFULL);
 
     if (is64) {
@@ -100,7 +90,6 @@ int pci_bar_info(uint8_t bus, uint8_t device, uint8_t function,
         *address |= ((uint64_t)hi << 32);
     }
 
-    /* Size probe: write all-ones, read back the size mask, restore. */
     uint32_t orig_lo = bar;
     uint32_t orig_hi = is64 ? pci_config_read_dword(bus, device, function, offset + 4) : 0;
 
@@ -116,7 +105,6 @@ int pci_bar_info(uint8_t bus, uint8_t device, uint8_t function,
         pci_config_write_dword(bus, device, function, offset + 4, orig_hi);
     }
 
-    /* Ones-complement the size mask in the BAR's native width. */
     if (is64) {
         uint64_t mask = ((uint64_t)mask_hi << 32) | (uint64_t)(mask_lo & 0xFFFFFFF0U);
         *size = (~mask) + 1ULL;

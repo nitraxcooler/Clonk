@@ -15,9 +15,8 @@
 #include "fs/vfs.h"
 #include "fs/fat32.h"
 #include "drivers/keyboard/keyboard.h"
+#include "lib/mem.h"
 
-/* These helpers write to the serial port (COM1) so we can see what's
- * happening even when there's no screen attached. */
 static inline void serial_putc(char c) {
     outb(0x3F8, (uint8_t)c);
 }
@@ -43,8 +42,6 @@ static void serial_dec(uint64_t v) {
     while (n > 0) serial_putc(tmp[--n]);
 }
 
-/* Milestone verification: mount the FAT32 image from the first SATA disk
- * and exercise VFS reads to prove the AHCI DMA path works end-to-end. */
 static void sata_fat32_verify(void) {
     block_device *sata = blockdev_get("sata0");
     if (sata == NULL) {
@@ -234,31 +231,199 @@ static void halt(void) {
     }
 }
 
-static void initialize_storage(void) {
+static bool string_equals(const char *left, const char *right) {
+    if (left == NULL || right == NULL) return false;
+    while (*left != '\0' && *right != '\0' && *left == *right) {
+        ++left;
+        ++right;
+    }
+    return *left == '\0' && *right == '\0';
+}
+
+static bool path_ends_with(const char *path, const char *suffix) {
+    if (path == NULL || suffix == NULL) return false;
+    size_t path_length = 0;
+    size_t suffix_length = 0;
+    while (path[path_length] != '\0') ++path_length;
+    while (suffix[suffix_length] != '\0') ++suffix_length;
+    if (suffix_length > path_length) return false;
+    size_t offset = path_length - suffix_length;
+    for (size_t i = 0; i < suffix_length; ++i) {
+        if (path[offset + i] != suffix[i]) return false;
+    }
+    return true;
+}
+
+static bool boot_requests_ahci_root(void) {
+    if (limine_module_request.response == NULL) return false;
+    struct limine_module_response *modules = limine_module_request.response;
+    if (modules->modules == NULL) return false;
+    for (uint64_t i = 0; i < modules->module_count; ++i) {
+        struct limine_file *module = modules->modules[i];
+        if (module == NULL) continue;
+        if (string_equals(module->string, "myos.storage=ahci") ||
+            path_ends_with(module->path, "ahci-root.flag")) {
+            serial_write("BOOT: AHCI root test marker detected\n");
+            return true;
+        }
+    }
+    serial_write("BOOT: AHCI root test marker not present\n");
+    return false;
+}
+
+static bool ahci_read_self_test(block_device *dev) {
+    uint8_t first_two[BLOCKDEV_SECTOR_SIZE * 2U];
+    uint8_t last[BLOCKDEV_SECTOR_SIZE];
+    uint8_t invalid[BLOCKDEV_SECTOR_SIZE];
+
+    if (dev == NULL || dev->sector_size != BLOCKDEV_SECTOR_SIZE ||
+        dev->sector_count < 2U) {
+        serial_write("AHCI TEST: unsupported disk geometry\n");
+        return false;
+    }
+
+    if (blockdev_read_sectors(dev, 0, 2, first_two) != 0 ||
+        first_two[3] != 'M' || first_two[4] != 'Y' ||
+        first_two[5] != 'O' || first_two[6] != 'S' ||
+        first_two[7] != 'F' || first_two[8] != 'A' ||
+        first_two[9] != 'T' || first_two[10] != '3' ||
+        first_two[510] != 0x55 || first_two[511] != 0xAA ||
+        first_two[BLOCKDEV_SECTOR_SIZE] != 0x52 ||
+        first_two[BLOCKDEV_SECTOR_SIZE + 1U] != 0x52 ||
+        first_two[BLOCKDEV_SECTOR_SIZE + 2U] != 0x61 ||
+        first_two[BLOCKDEV_SECTOR_SIZE + 3U] != 0x41) {
+        serial_write("AHCI TEST: beginning/multi-sector read FAILED\n");
+        return false;
+    }
+    serial_write("AHCI TEST: LBA 0 count 2 data verified\n");
+
+    if (blockdev_read_sectors(dev, dev->sector_count - 1U, 1, last) != 0 ||
+        last[0] != 'M' || last[1] != 'Y' || last[2] != 'O' ||
+        last[3] != 'S' || last[4] != '-' || last[5] != 'A' ||
+        last[6] != 'H' || last[7] != 'C' || last[8] != 'I' ||
+        last[9] != '-' || last[10] != 'E' || last[11] != 'N' ||
+        last[12] != 'D') {
+        serial_write("AHCI TEST: last-sector read FAILED\n");
+        return false;
+    }
+    serial_write("AHCI TEST: final LBA data verified\n");
+
+    if (blockdev_read_sectors(dev, dev->sector_count, 1, invalid) == 0) {
+        serial_write("AHCI TEST: out-of-range read was incorrectly accepted\n");
+        return false;
+    }
+    serial_write("AHCI TEST: out-of-range read rejected\n");
+    serial_write("AHCI TEST: all read checks passed\n");
+    return true;
+}
+
+static bool ahci_write_self_test(block_device *dev) {
+    enum { TEST_LBA = 8, TEST_SECTORS = 2 };
+    uint8_t original[BLOCKDEV_SECTOR_SIZE * TEST_SECTORS];
+    uint8_t pattern[BLOCKDEV_SECTOR_SIZE * TEST_SECTORS];
+    uint8_t verify[BLOCKDEV_SECTOR_SIZE * TEST_SECTORS];
+
+    if (dev == NULL || dev->write == NULL || dev->flush == NULL ||
+        dev->sector_count <= TEST_LBA + TEST_SECTORS) {
+        serial_write("AHCI TEST: device is not safely writable\n");
+        return false;
+    }
+    if (blockdev_read_sectors(dev, TEST_LBA, TEST_SECTORS, original) != 0) {
+        serial_write("AHCI TEST: could not save reserved test sectors\n");
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(pattern); ++i) {
+        pattern[i] = (uint8_t)(i * 37U + 11U);
+    }
+
+    bool passed = false;
+    if (blockdev_write_sectors(dev, TEST_LBA, 1, pattern) != 0 ||
+        blockdev_read_sectors(dev, TEST_LBA, 1, verify) != 0 ||
+        memcmp(pattern, verify, BLOCKDEV_SECTOR_SIZE) != 0 ||
+        blockdev_flush(dev) != 0) {
+        serial_write("AHCI TEST: single-sector write/readback FAILED\n");
+        goto restore;
+    }
+    serial_write("AHCI TEST: single-sector write/readback verified\n");
+
+    if (blockdev_write_sectors(dev, TEST_LBA, TEST_SECTORS, pattern) != 0 ||
+        blockdev_read_sectors(dev, TEST_LBA, TEST_SECTORS, verify) != 0 ||
+        memcmp(pattern, verify, sizeof(pattern)) != 0 ||
+        blockdev_flush(dev) != 0) {
+        serial_write("AHCI TEST: multi-sector write/readback FAILED\n");
+        goto restore;
+    }
+    serial_write("AHCI TEST: multi-sector write/readback verified\n");
+
+    if (blockdev_write_sectors(dev, dev->sector_count - 1U, 2, pattern) == 0 ||
+        blockdev_write_sectors(dev, dev->sector_count, 1, pattern) == 0) {
+        serial_write("AHCI TEST: out-of-range write was accepted\n");
+        goto restore;
+    }
+    serial_write("AHCI TEST: out-of-range writes rejected\n");
+    passed = true;
+
+restore:
+    if (blockdev_write_sectors(dev, TEST_LBA, TEST_SECTORS, original) != 0 ||
+        blockdev_flush(dev) != 0 ||
+        blockdev_read_sectors(dev, TEST_LBA, TEST_SECTORS, verify) != 0 ||
+        memcmp(original, verify, sizeof(original)) != 0) {
+        serial_write("AHCI TEST: failed to restore reserved test sectors\n");
+        return false;
+    }
+    serial_write("AHCI TEST: reserved sectors restored and flushed\n");
+    return passed;
+}
+
+static bool initialize_storage(bool ahci_root) {
     if (vfs_init() != 0) {
         serial_write("STORAGE: VFS initialization failed\n");
         kprint("VFS initialization failed.\n", 0xFF0000);
-        return;
+        return false;
     }
 
     blockdev_init();
-    block_device *dev = blockdev_get("ramdisk0");
-    if (dev == NULL) {
-        for (uint64_t i = 0; i < blockdev_get_count(); ++i) {
-            block_device *candidate = blockdev_get_by_index((int)i);
-            if (candidate != NULL && candidate->write != NULL) {
-                dev = candidate;
-                break;
+    block_device *dev = NULL;
+    if (ahci_root) {
+        serial_write("STORAGE: AHCI test mode requested; selecting sata0\n");
+        dev = blockdev_get("sata0");
+        if (dev == NULL) {
+            serial_write("STORAGE: AHCI root requested but sata0 is unavailable\n");
+            kprint("AHCI root requested but no SATA disk was detected.\n", 0xFF0000);
+            return false;
+        }
+        if (dev->write == NULL || dev->flush == NULL) {
+            serial_write("STORAGE: AHCI root disk lacks write/flush support\n");
+            kprint("AHCI test disk is not safely writable.\n", 0xFF0000);
+            return false;
+        }
+        if (!ahci_read_self_test(dev)) {
+            serial_write("STORAGE: AHCI read validation failed; refusing fallback\n");
+            return false;
+        }
+        if (!ahci_write_self_test(dev)) {
+            serial_write("STORAGE: AHCI write validation failed; refusing fallback\n");
+            return false;
+        }
+    } else {
+        dev = blockdev_get("ramdisk0");
+        if (dev == NULL) {
+            for (uint64_t i = 0; i < blockdev_get_count(); ++i) {
+                block_device *candidate = blockdev_get_by_index((int)i);
+                if (candidate != NULL && candidate->write != NULL) {
+                    dev = candidate;
+                    break;
+                }
             }
         }
-    }
-    if (dev == NULL) {
-        dev = blockdev_get_by_index(0);
+        if (dev == NULL) {
+            dev = blockdev_get_by_index(0);
+        }
     }
     if (dev == NULL) {
         serial_write("STORAGE: no boot disk module found\n");
         kprint("No boot disk module found.\n", 0xFF0000);
-        return;
+        return false;
     }
     if (dev->write == NULL) {
         serial_write("STORAGE: root device is read-only\n");
@@ -266,19 +431,24 @@ static void initialize_storage(void) {
     if (fat32_mount(dev, &boot_fat32) != 0) {
         serial_write("STORAGE: FAT32 mount failed\n");
         kprint("FAT32 mount failed.\n", 0xFF0000);
-        return;
+        return false;
     }
     if (vfs_do_mount("/", "fat32", dev, &fat32_ops, &boot_fat32) != 0) {
         serial_write("STORAGE: root VFS mount failed\n");
         kprint("Root VFS mount failed.\n", 0xFF0000);
-        return;
+        return false;
     }
-    serial_write("STORAGE: FAT32 mounted at /\n");
+    if (ahci_root) {
+        serial_write("STORAGE: AHCI sata0 FAT32 mounted as persistent root /\n");
+    } else {
+        serial_write("STORAGE: FAT32 mounted at /\n");
+    }
     kprint("FAT32 mounted at /\n", 0x00FF00);
+    return true;
 }
 
 void _start(void) {
-    /* Let the serial log know we made it into the kernel. */
+
     serial_write("BOOT: _start\n");
 
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) halt();
@@ -286,7 +456,6 @@ void _start(void) {
 
     fb = framebuffer_request.response->framebuffers[0];
 
-    /* Tell the serial log that the framebuffer is ready to use. */
     serial_write("BOOT: framebuffer OK\n");
 
     kclear();
@@ -343,10 +512,17 @@ void _start(void) {
 
     serial_write("BOOT: initializing heap\n");
     heap_init();
+    bool ahci_root = boot_requests_ahci_root();
     serial_write("BOOT: initializing storage\n");
-    initialize_storage();
-    serial_write("BOOT: verifying SATA / FAT32\n");
-    sata_fat32_verify();
+    bool storage_ready = initialize_storage(ahci_root);
+    if (ahci_root && !storage_ready) {
+        serial_write("BOOT: AHCI test mode halted without RAM-disk fallback\n");
+        halt();
+    }
+    if (!ahci_root) {
+        serial_write("BOOT: verifying SATA / FAT32\n");
+        sata_fat32_verify();
+    }
 
     serial_write("BOOT: launching userspace /init\n");
     usermode_run_init();

@@ -1,19 +1,3 @@
-/*
- * MyOS kernel heap.
- *
- * The heap lives in a reserved region of high-half virtual memory. Only
- * the part that's actually been handed physical pages is mapped; the rest
- * of the arena is just reserved address space.
- *
- * Mapped memory is split into blocks. Each block has a small header
- * (size + magic) and a footer (a copy of the size tag). The footer lets
- * us find the previous block in O(1) when freeing.
- *
- * Free blocks are linked together in a doubly-linked list. Allocation is
- * first-fit: we take the first block big enough, and split it if there's
- * a lot of leftover space. Out-of-memory returns NULL — the allocator
- * never silently corrupts memory.
- */
 
 #include "kernel/heap.h"
 
@@ -28,25 +12,23 @@
 
 #define HEAP_PAGE_SIZE PMM_PAGE_SIZE
 
-/* The heap lives in the high half, above the kernel and the HHDM map. */
 #define HEAP_VIRT_BASE  0xffffffffc0000000ULL
-#define HEAP_INIT_SIZE  0x10000ULL         /* 64 KiB mapped at init          */
+#define HEAP_INIT_SIZE  0x10000ULL
 
-/* Largest payload size we can turn into a block without integer overflow. */
 #define HEAP_MAX_SIZE ((size_t)-1 - 256UL)
 
-#define HEAP_LINK_SIZE 16UL                /* free-list pointers in payload  */
+#define HEAP_LINK_SIZE 16UL
 
 typedef struct heap_block {
-    uint64_t size;   /* total block size; low bit set when the block is used */
-    uint64_t magic;  /* HEAP_MAGIC on used blocks, 0 on free blocks          */
+    uint64_t size;
+    uint64_t magic;
 } heap_block;
 
 static uint64_t heap_mapped_bytes = 0;
-static uint64_t heap_used_bytes   = 0;   /* payload bytes held by live allocs */
-static uint64_t heap_free_total   = 0;   /* total bytes in free blocks        */
-static uint64_t heap_alloc_count  = 0;   /* outstanding allocations           */
-static uint64_t heap_free_calls   = 0;   /* total kfree() calls               */
+static uint64_t heap_used_bytes   = 0;
+static uint64_t heap_free_total   = 0;
+static uint64_t heap_alloc_count  = 0;
+static uint64_t heap_free_calls   = 0;
 static uint64_t heap_peak_bytes   = 0;
 static bool heap_initialized = false;
 
@@ -63,7 +45,6 @@ static uint64_t align_up_page(uint64_t v) {
 static uint64_t blk_size(uint64_t sf)    { return sf & ~1ULL; }
 static bool     blk_is_used(uint64_t sf) { return (sf & 1ULL) != 0ULL; }
 
-/* Free blocks store their list links inside their own payload. */
 static heap_block **fl_prev(heap_block *b) {
     return (heap_block **)((uint8_t *)b + HEAP_HEADER_SIZE);
 }
@@ -111,7 +92,6 @@ static heap_block *block_next(heap_block *b) {
     return (heap_block *)((uint8_t *)b + blk_size(b->size));
 }
 
-/* The block that ends exactly at the end of the mapped region. */
 static heap_block *heap_top(void) {
     if (heap_mapped_bytes == 0) {
         return NULL;
@@ -120,7 +100,7 @@ static heap_block *heap_top(void) {
     uint64_t last_size = blk_size(*(uint64_t *)(end - HEAP_FOOTER_SIZE));
     return (heap_block *)(end - last_size);
 }
-/* Map more physical pages and add them to the heap as free space. */
+
 static bool heap_grow(uint64_t need_size) {
     uint64_t extra = align_up_page(need_size);
     if (heap_mapped_bytes + extra > HEAP_ARENA_SIZE) {
@@ -132,10 +112,10 @@ static bool heap_grow(uint64_t need_size) {
     while (new_end - old_end < extra) {
         uint64_t phys = pmm_alloc_page();
         if (phys == 0) {
-            break;   /* physical memory exhausted */
+            break;
         }
         uint64_t virt = HEAP_VIRT_BASE + new_end;
-        /* Zero the fresh page through the HHDM identity mapping. */
+
         memset((void *)(uintptr_t)vm_phys_to_virt(phys), 0, HEAP_PAGE_SIZE);
         if (!vm_map_page(virt, phys, VMM_PAGE_PRESENT | VMM_PAGE_WRITABLE)) {
             pmm_free_page(phys);
@@ -147,8 +127,6 @@ static bool heap_grow(uint64_t need_size) {
         return false;
     }
 
-    /* Add the new pages to the heap. If the last block is free, just
-     * grow it; otherwise create a fresh free block. */
     size_t add = (size_t)(new_end - old_end);
     heap_block *t = heap_top();
     if (t != NULL && !blk_is_used(t->size)) {
@@ -165,7 +143,6 @@ static bool heap_grow(uint64_t need_size) {
     return true;
 }
 
-/* Find the first free block big enough, splitting it if there's room. */
 static void *heap_alloc_from_free(uint64_t total) {
     for (heap_block *b = heap_free_head; b != NULL; b = *fl_next(b)) {
         uint64_t bsz = blk_size(b->size);
@@ -182,7 +159,7 @@ static void *heap_alloc_from_free(uint64_t total) {
             heap_free_total -= total;
             heap_used_bytes += total - HEAP_HEADER_SIZE - HEAP_FOOTER_SIZE;
         } else {
-            /* Remainder too small to be a real block: consume the whole block. */
+
             fl_remove(b);
             blk_set_used(b, bsz);
             heap_free_total -= bsz;
@@ -193,7 +170,6 @@ static void *heap_alloc_from_free(uint64_t total) {
     return NULL;
 }
 
-/* Work out the full block size (header + payload + footer, aligned). */
 static size_t block_total_for(size_t size) {
     size_t need = (size_t)align_up16(size) + HEAP_HEADER_SIZE + HEAP_FOOTER_SIZE;
     if (need < HEAP_MIN_BLOCK) {
@@ -256,11 +232,11 @@ void *krealloc(void *ptr, size_t new_size) {
     }
     size_t cap = (size_t)(blk_size(b->size) - HEAP_HEADER_SIZE - HEAP_FOOTER_SIZE);
     if (new_size <= cap) {
-        return ptr;   /* no growth needed; do not shrink in place */
+        return ptr;
     }
     void *np = kmalloc(new_size);
     if (np == NULL) {
-        return NULL;   /* out of memory: keep the old block intact */
+        return NULL;
     }
     memcpy(np, ptr, cap);
     kfree(ptr);
@@ -288,7 +264,6 @@ void kfree(void *ptr) {
 
     uint64_t end = HEAP_VIRT_BASE + heap_mapped_bytes;
 
-    /* Coalesce with the next block when it is also free. */
     heap_block *n = block_next(b);
     if ((uint64_t)(uintptr_t)n < end && !blk_is_used(n->size)) {
         fl_remove(n);
@@ -297,7 +272,6 @@ void kfree(void *ptr) {
         blk_set_free(b, bsz);
     }
 
-    /* Coalesce with the previous block, detected via its footer tag. */
     if ((uint64_t)(uintptr_t)b > HEAP_VIRT_BASE) {
         uint64_t prev_sf = *(uint64_t *)((uint8_t *)b - HEAP_FOOTER_SIZE);
         if (!blk_is_used(prev_sf)) {
@@ -329,7 +303,6 @@ static size_t heap_capacity(const void *ptr) {
     return (size_t)(blk_size(b->size) - HEAP_HEADER_SIZE - HEAP_FOOTER_SIZE);
 }
 
-/* Walk every block and check the heap is still consistent. */
 static void heap_validate(const char *where) {
     (void)where;
     uint64_t end = HEAP_VIRT_BASE + heap_mapped_bytes;
@@ -410,7 +383,7 @@ void heap_init(void) {
 bool heap_is_initialized(void) {
     return heap_initialized;
 }
-/* Fill an allocation with a known pattern so we can detect corruption. */
+
 static void heap_fill_pattern(void *ptr, size_t bytes, uint8_t base) {
     uint8_t *p = (uint8_t *)ptr;
     for (size_t i = 0; i < bytes; ++i) {
@@ -435,12 +408,10 @@ void heap_self_test(void) {
     }
     heap_validate("selftest:start");
 
-    /* kmalloc(0) must fail cleanly, not corrupt the heap. */
     if (kmalloc(0) != NULL) {
         kernel_panic("heap_self_test: kmalloc(0) returned non-NULL");
     }
 
-    /* A handful of small allocations of distinct sizes. */
     void *a = kmalloc(1);
     void *b = kmalloc(24);
     void *c = kmalloc(40);
@@ -454,13 +425,11 @@ void heap_self_test(void) {
         kernel_panic("heap_self_test: overlapping small allocations");
     }
 
-    /* Large allocation spanning pages. */
     void *big = kmalloc(2 * 1024 * 1024);
     if (big == NULL || ((uintptr_t)big & 15UL) != 0) {
         kernel_panic("heap_self_test: large allocation failed/misaligned");
     }
 
-    /* Fill and verify each live allocation to catch overlap/corruption. */
     heap_fill_pattern(a, 1, 0x10);
     heap_fill_pattern(b, 24, 0x20);
     heap_fill_pattern(c, 40, 0x30);
@@ -472,20 +441,17 @@ void heap_self_test(void) {
         kernel_panic("heap_self_test: live-allocation data corrupted");
     }
 
-    /* Free the small ones and confirm the heap stays aligned/valid. */
     kfree(a);
     kfree(b);
     kfree(c);
     heap_validate("selftest:after-free");
 
-    /* Freed space is reused. */
     void *d = kmalloc(24);
     if (d == NULL) {
         kernel_panic("heap_self_test: could not reuse freed space");
     }
     kfree(d);
 
-    /* kcalloc zero-init, plus its integer-overflow guard. */
     void *z = kcalloc(64, 8);
     if (z == NULL) {
         kernel_panic("heap_self_test: kcalloc returned NULL");
@@ -500,7 +466,6 @@ void heap_self_test(void) {
         kernel_panic("heap_self_test: kcalloc overflow guard failed");
     }
 
-    /* krealloc: grow must preserve existing bytes; shrink must keep head. */
     void *r = kmalloc(16);
     if (r == NULL) {
         kernel_panic("heap_self_test: krealloc source failed");
@@ -524,7 +489,6 @@ void heap_self_test(void) {
 
     heap_validate("selftest:after-krealloc");
 
-    /* Deterministic pseudo-random allocation / free pattern. */
     enum { N_BLOCKS = 64 };
     void *slots[N_BLOCKS];
     size_t slots_size[N_BLOCKS];
@@ -565,22 +529,16 @@ void heap_self_test(void) {
 
     heap_validate("selftest:after-random");
 
-    /* Integer/overflow guard at the public API boundary. */
     if (kmalloc((size_t)-1) != NULL) {
         kernel_panic("heap_self_test: kmalloc(SIZE_MAX) not rejected");
     }
 
-    /* Out-of-memory at the arena level: a request too large for the
-     * 1GiB arena must return NULL without corrupting the heap. This avoids
-     * exhausting physical memory (which would otherwise trip the VMM page
-     * table allocator and turn the test into a bang). */
     if (kmalloc(HEAP_ARENA_SIZE + 65536) != NULL) {
         kernel_panic("heap_self_test: oversized arena request not rejected");
     }
 
     heap_validate("selftest:after-oom");
 
-    /* Free the one big allocation; the heap must still be fully valid. */
     kfree(big);
     heap_validate("selftest:end");
 }

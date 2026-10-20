@@ -1,9 +1,3 @@
-/*
- * MyOS block-device registry.
- *
- * A simple list of block devices. Storage drivers register themselves
- * here, and higher layers (VFS, filesystems) look them up by name.
- */
 
 #include "kernel/blockdev.h"
 
@@ -22,7 +16,6 @@ int blockdev_register(block_device *dev) {
         return -1;
     }
 
-    /* Reject a device whose name is already taken. */
     block_device *existing = blockdev_list_head;
     while (existing != NULL) {
         if (strcmp(existing->name, dev->name) == 0) {
@@ -74,7 +67,7 @@ int blockdev_read_sectors(block_device *dev, uint64_t lba, uint32_t count, void 
     if (count == 0) {
         return 0;
     }
-    /* Make sure the request stays within the device. */
+
     if (lba >= dev->sector_count || dev->sector_count - lba < count) {
         return -1;
     }
@@ -94,6 +87,13 @@ int blockdev_write_sectors(block_device *dev, uint64_t lba, uint32_t count, cons
     return dev->write(dev->dev_data, lba, count, buffer);
 }
 
+int blockdev_flush(block_device *dev) {
+    if (dev == NULL) {
+        return -1;
+    }
+    return dev->flush == NULL ? 0 : dev->flush(dev->dev_data);
+}
+
 uint32_t blockdev_sector_size(block_device *dev) {
     if (dev == NULL) {
         return 0;
@@ -109,7 +109,7 @@ uint64_t blockdev_sector_count(block_device *dev) {
 }
 
 void blockdev_init(void) {
-    /* Each storage driver registers its devices here. */
+
     ramdisk_init();
     ahci_init();
 }
