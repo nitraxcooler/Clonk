@@ -9,9 +9,7 @@ production-ready operating system.
 
 The project boots into an interactive Ring 3 `/init` shell and returns to the
 kernel shell when `/init` exits. The runtime `version` command reports
-**v0.1.1**. The local Git tags include `v0.1.0` and `Pre-Release`; the runtime
-string does not imply that a `v0.1.1` release tag exists.
-
+**v0.1.1**.
 ## Current Features
 
 - Higher-half x86-64 kernel and Limine boot configuration
