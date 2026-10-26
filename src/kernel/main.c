@@ -261,7 +261,7 @@ static bool boot_requests_ahci_root(void) {
     for (uint64_t i = 0; i < modules->module_count; ++i) {
         struct limine_file *module = modules->modules[i];
         if (module == NULL) continue;
-        if (string_equals(module->string, "myos.storage=ahci") ||
+        if (string_equals(module->string, "clonk.storage=ahci") ||
             path_ends_with(module->path, "ahci-root.flag")) {
             serial_write("BOOT: AHCI root test marker detected\n");
             return true;
@@ -283,10 +283,10 @@ static bool ahci_read_self_test(block_device *dev) {
     }
 
     if (blockdev_read_sectors(dev, 0, 2, first_two) != 0 ||
-        first_two[3] != 'M' || first_two[4] != 'Y' ||
-        first_two[5] != 'O' || first_two[6] != 'S' ||
-        first_two[7] != 'F' || first_two[8] != 'A' ||
-        first_two[9] != 'T' || first_two[10] != '3' ||
+        first_two[3] != 'C' || first_two[4] != 'L' ||
+        first_two[5] != 'O' || first_two[6] != 'N' ||
+        first_two[7] != 'K' || first_two[8] != 'F' ||
+        first_two[9] != 'S' || first_two[10] != '3' ||
         first_two[510] != 0x55 || first_two[511] != 0xAA ||
         first_two[BLOCKDEV_SECTOR_SIZE] != 0x52 ||
         first_two[BLOCKDEV_SECTOR_SIZE + 1U] != 0x52 ||
@@ -298,11 +298,11 @@ static bool ahci_read_self_test(block_device *dev) {
     serial_write("AHCI TEST: LBA 0 count 2 data verified\n");
 
     if (blockdev_read_sectors(dev, dev->sector_count - 1U, 1, last) != 0 ||
-        last[0] != 'M' || last[1] != 'Y' || last[2] != 'O' ||
-        last[3] != 'S' || last[4] != '-' || last[5] != 'A' ||
-        last[6] != 'H' || last[7] != 'C' || last[8] != 'I' ||
-        last[9] != '-' || last[10] != 'E' || last[11] != 'N' ||
-        last[12] != 'D') {
+        last[0] != 'C' || last[1] != 'L' || last[2] != 'O' ||
+        last[3] != 'N' || last[4] != 'K' || last[5] != '-' ||
+        last[6] != 'A' || last[7] != 'H' || last[8] != 'C' ||
+        last[9] != 'I' || last[10] != '-' || last[11] != 'E' ||
+        last[12] != 'N' || last[13] != 'D') {
         serial_write("AHCI TEST: last-sector read FAILED\n");
         return false;
     }
@@ -460,7 +460,7 @@ void _start(void) {
 
     kclear();
 
-    kprint("MyOS CLI Interactive Shell v0.1.1\n", 0x00FF00);
+    kprint("CLONK CLI Interactive Shell v0.1.1\n", 0x00FF00);
     kprint("Type 'help' for available commands.\n\n", 0xFFFFFF);
 
     serial_write("BOOT: initializing GDT and TSS\n");
@@ -528,7 +528,7 @@ void _start(void) {
     usermode_run_init();
 
     serial_write("BOOT: ready for CLI\n");
-    kprint("MyOS:> ", 0x00FFFF);
+    kprint("Clonk:> ", 0x00FFFF);
 
     serial_write("BOOT: entering halt loop\n");
     halt();

@@ -41,14 +41,14 @@ static size_t append_decimal(char *buffer, size_t offset, uint64_t value) {
 }
 
 void _start(void) {
-    uint64_t pid = (uint64_t)syscall0(MYOS_SYS_GETPID);
+    uint64_t pid = (uint64_t)syscall0(CLONK_SYS_GETPID);
     volatile uint64_t private_stack_counter = 0U;
-    (void)syscall0(MYOS_SYS_YIELD);
+    (void)syscall0(CLONK_SYS_YIELD);
     for (uint64_t i = 0; i < 5U; ++i) {
         ++private_counter;
         ++private_stack_counter;
         if (private_counter != i + 1U || private_stack_counter != i + 1U) {
-            (void)syscall2(MYOS_SYS_EXIT, 90U, 0U);
+            (void)syscall2(CLONK_SYS_EXIT, 90U, 0U);
             for (;;) __asm__ volatile ("pause");
         }
 
@@ -68,8 +68,8 @@ void _start(void) {
         message[11] = '=';
         size_t length = append_decimal(message, 12U, pid);
         message[length++] = '\n';
-        (void)syscall2(MYOS_SYS_WRITE, (uint64_t)(uintptr_t)message, length);
+        (void)syscall2(CLONK_SYS_WRITE, (uint64_t)(uintptr_t)message, length);
     }
-    (void)syscall2(MYOS_SYS_EXIT, 0U, 0U);
+    (void)syscall2(CLONK_SYS_EXIT, 0U, 0U);
     for (;;) __asm__ volatile ("pause");
 }

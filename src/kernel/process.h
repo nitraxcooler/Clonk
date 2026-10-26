@@ -1,5 +1,5 @@
-#ifndef MYOS_KERNEL_PROCESS_H
-#define MYOS_KERNEL_PROCESS_H
+#ifndef CLONK_KERNEL_PROCESS_H
+#define CLONK_KERNEL_PROCESS_H
 
 #include <stdbool.h>
 #include <stddef.h>

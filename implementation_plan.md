@@ -1,8 +1,8 @@
-# Implementation Plan — MyOS Subsystems & Roadmap
+# Implementation Plan — Clonk Subsystems & Roadmap
 
 ## Goal
 
-Track incremental development of the existing MyOS x86-64 kernel while preserving and reusing its PMM, VMM, IDT, panic, CLI, and Limine boot architecture. MyOS now has a bounded **Ring 3 process and round-robin scheduling foundation** and a QEMU-validated **AHCI persistent FAT32 test path** alongside its heap, diagnostics, block-device, VFS, and FAT32 infrastructure. MyBread and general filesystem-based process creation remain future work.
+Track incremental development of the existing Clonk x86-64 kernel while preserving and reusing its PMM, VMM, IDT, panic, CLI, and Limine boot architecture. Clonk now has a bounded **Ring 3 process and round-robin scheduling foundation** and a QEMU-validated **AHCI persistent FAT32 test path** alongside its heap, diagnostics, block-device, VFS, and FAT32 infrastructure. ClonkFS and general filesystem-based process creation remain future work.
 
 ## Scope & Context
 
@@ -96,7 +96,7 @@ flags, rejects dynamic/interpreter/TLS and unknown program segment types, and
 creates a fixed four-page user stack with an unmapped guard page below it.
 Boot-time ELF self-tests cover malformed inputs, permissions, guard placement,
 and address-space reclamation; `/init` checks invalid syscall pointers in ring
-3. A test-only `MYOS_TEST_SUPERVISOR_FAULT` build verifies that a user access
+3. A test-only `CLONK_TEST_SUPERVISOR_FAULT` build verifies that a user access
 to a supervisor mapping terminates the process and returns to the kernel.
 Each process gets a separate PML4 with the kernel's supervisor-only upper-half
 mappings copied; private lower-half pages and page tables are reclaimed on
@@ -116,7 +116,7 @@ the kernel shell read back a file written by `/init` after the userspace exit.
 The kernel-shell `selftest` command passed PMM, VMM, and heap checks; the
 `panic` and `pfault` commands also emitted their expected QEMU serial
 diagnostics. These checks do not constitute exhaustive security testing. A
-test-only `MYOS_TEST_SUPERVISOR_FAULT` build previously exercised termination
+test-only `CLONK_TEST_SUPERVISOR_FAULT` build previously exercised termination
 on a user access to supervisor memory; normal builds do not trigger it.
 
 The AHCI QEMU path additionally verified reads of the FAT32 boot/FSInfo
@@ -197,8 +197,8 @@ memory-safety proof or physical-hardware validation.
 3. Extend existing `panic.c`/`idt.c` rather than replacing them; decode x86-64 page-fault error bits and render the already-saved general-purpose registers.
 4. Add a thin block-device abstraction and a RAM-backed device for testing.
 5. Build a small VFS (filesystem ops vtable + mount table) that does **not** assume FAT32.
-6. Implement FAT32 read-only first, then write support, as a clean MyOS-native implementation.
-7. Design and implement a minimal MyBread with its own spec (superblock, inode area, free-space bitmap, directory blocks).
+6. Implement FAT32 read-only first, then write support, as a clean Clonk-native implementation.
+7. Design and implement a minimal ClonkFS with its own spec (superblock, inode area, free-space bitmap, directory blocks).
 8. Add deliberate failure tests and CLI commands; run self-tests on boot via serial so headless QEMU is verifiable.
 ## Types
 
@@ -326,7 +326,7 @@ typedef struct fs_ops {
 
 typedef struct vfs_mount {
     const char    *mount_path;  /* "/", "/fat32/", "/mnt/"            */
-    uint64_t fs_type;           /* FS_FAT32 or FS_MYBREAD             */
+    uint64_t fs_type;           /* FS_FAT32 or FS_CLONKFS             */
     struct block_device *dev;   /* underlying block device            */
     void *fs;                   /* private filesystem context         */
     fs_ops *ops;                /* method table                       */
@@ -346,7 +346,7 @@ typedef struct vfs_entry {
 } vfs_entry;
 
 #define FS_FAT32   1
-#define FS_MYBREAD 2
+#define FS_CLONKFS 2
 ```
 
 ### 6. FAT32 (`src/fs/fat32/fat32.h`)
@@ -402,11 +402,11 @@ typedef struct {
     uint64_t size;            /* file length                              */
 } fat32_handle;
 ```
-### 7. MyBread (`src/fs/mybread/mybread.h`)
+### 7. ClonkFS (`src/fs/clonkfs/clonkfs.h`)
 
 ```c
-#define MYBREAD_MAGIC   0x4D594252454144ULL   /* "MYBREAD" packed */
-#define MYBREAD_VERSION 1
+#define CLONKFS_MAGIC   0x434C4F4E4B4653ULL   /* "CLONKFS" packed */
+#define CLONKFS_VERSION 1
 
 typedef struct {
     uint64_t magic;
@@ -420,7 +420,7 @@ typedef struct {
     uint64_t inode_blocks;
     uint64_t root_inode;
     uint64_t flags_reserved;
-} mybread_superblock;
+} clonkfs_superblock;
 
 typedef struct {
     uint32_t used       : 1;
@@ -433,7 +433,7 @@ typedef struct {
     uint32_t parent_inode;
     uint64_t ctime;
     /* future: permissions, checksums, journal state */
-} mybread_inode;
+} clonkfs_inode;
 
 typedef struct {
     uint32_t name_len;
@@ -441,10 +441,10 @@ typedef struct {
     uint32_t inode;
     uint8_t  kind;        /* MB_FILE / MB_DIR                       */
     uint8_t  reserved[3];
-} mybread_dir_entry;
+} clonkfs_dir_entry;
 ```
 
-*(MyBread layout above is the starting point; the exact packed layout is finalized in `docs/mybread.md` before implementation. MyBread uses inode-like metadata so it can grow into large files, hierarchical dirs, permissions, timestamps, and crash-consistency without cloning FAT32.)*
+*(ClonkFS layout above is the starting point; the exact packed layout is finalized in `docs/clonkfs.md` before implementation. ClonkFS uses inode-like metadata so it can grow into large files, hierarchical dirs, permissions, timestamps, and crash-consistency without cloning FAT32.)*
 
 ### 8. Self-test
 
@@ -467,8 +467,8 @@ Self-test functions panic on failure, consistent with the existing `pmm_self_tes
 | `src/fs/vfs.c` | mount table, dispatch, path helpers |
 | `src/fs/fat32/fat32.h` | FAT32 structures |
 | `src/fs/fat32/fat32.c` | FAT32 filesystem implementation |
-| `src/fs/mybread/mybread.h` | MyBread on-disk + API types |
-| `src/fs/mybread/mybread.c` | MyBread implementation |
+| `src/fs/clonkfs/clonkfs.h` | ClonkFS on-disk + API types |
+| `src/fs/clonkfs/clonkfs.c` | ClonkFS implementation |
 | `tools/make_fat32_image.py` | host-side stdlib script to generate a small FAT32 image for embedding |
 | `src/boot/fat32_image.h` | generated byte-array from the above tool |
 | `docs/memory.md` | memory architecture (PMM/VMM/heap layout) |
@@ -476,7 +476,7 @@ Self-test functions panic on failure, consistent with the existing `pmm_self_tes
 | `docs/pagefault.md` | error-code decode + register diagnostics |
 | `docs/vfs_blockdev.md` | block-device + VFS design |
 | `docs/fat32.md` | FAT32 implementation notes |
-| `docs/mybread.md` | MyBread specification |
+| `docs/clonkfs.md` | ClonkFS specification |
 
 ### Modified files
 
@@ -530,12 +530,12 @@ Self-test functions panic on failure, consistent with the existing `pmm_self_tes
 Read-only: `fat32_mount`, `fat32_open`, `fat32_read`, `fat32_seek`, `fat32_readdir`, `fat32_find`, `cluster_to_sector`, `read_chain`, `is_eoc`, `read_fat`. Helpers: `cluster_to_sector`, `read_chain`, `is_eoc`, `read_fat`.
 Write later: `fat32_format`, `fat32_write`, `fat32_create`, `fat32_unlink`, `fat32_mkdir`, `fat32_truncate`, `write_fat`.
 
-### MyBread (`mybread.c`)
-`mybread_format`, `mybread_mount`, `mybread_create`, `mybread_write`, `mybread_read`, `mybread_list`, `mybread_delete`.
+### ClonkFS (`clonkfs.c`)
+`clonkfs_format`, `clonkfs_mount`, `clonkfs_create`, `clonkfs_write`, `clonkfs_read`, `clonkfs_list`, `clonkfs_delete`.
 
 ## Classes
 
-This is a C codebase — there are **no C++ classes**. The function-pointer structural analogues are `fs_ops` (VFS vtable), `block_device` (provider interface), and the state structs (`heap_block`, `fat32_fs`, `mybread_superblock`). **Do not rename `.c` files or convert to C++** per `AGENTS.md`. No existing module is removed; internal `fat32_handle`/MyBread layout may be adjusted as specs are finalized.
+This is a C codebase — there are **no C++ classes**. The function-pointer structural analogues are `fs_ops` (VFS vtable), `block_device` (provider interface), and the state structs (`heap_block`, `fat32_fs`, `clonkfs_superblock`). **Do not rename `.c` files or convert to C++** per `AGENTS.md`. No existing module is removed; internal `fat32_handle`/ClonkFS layout may be adjusted as specs are finalized.
 ## Dependencies
 
 - **No external libraries or packages.** The kernel stays freestanding.
@@ -568,7 +568,7 @@ FAT32:
 - `mountbad` loads a corrupted image (broken FAT chain / bad BPB tag) and verifies a diagnostic panic rather than silent corruption.
 - RAM-disk write test: format, create file, write, read back, `ls`, delete → verify byte round-trip.
 
-MyBread:
+ClonkFS:
 - `mbfmt` (format RAM disk), `mbmount`, `mkdir`, `create`, `write`, `read`, `list`, `delete`; corrupt a superblock magic to verify clean mount failure.
 - `fill` — full-disk exhaustion → graceful error, no corruption.
 
@@ -587,7 +587,7 @@ Physical SATA hardware and other controllers remain unvalidated.
 6. VFS (`vfs.c`) layered on block devices; dispatcher; build.
 7. FAT32 read-only: BPB parse, validation, FAT read, cluster→sector, root traversal, 8.3 lookup, file read, readdir; QEMU check against embedded image (`mount`, `ls`, `cat`).
 8. FAT32 write: format, free-cluster alloc, create, write, truncate, delete, mkdir (root + one-level dirs); QEMU round-trip.
-9. MyBread spec (`docs/mybread.md`) finalized; implement format/mount/create/write/read/list/delete; corrupt-input tests.
+9. ClonkFS spec (`docs/clonkfs.md`) finalized; implement format/mount/create/write/read/list/delete; corrupt-input tests.
 10. Integration pass: `make clean && make`; boot; run full self-test battery + CLI suites; update `docs/*` and `README.md`; commit in focused reviewable stages.
 
 ## Deferred / Honest limitations

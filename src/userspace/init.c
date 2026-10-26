@@ -8,7 +8,7 @@
 
 static char input_buffer[INPUT_BUFFER_SIZE];
 static char read_validation_buffer;
-static char filesystem_validation_buffer[MYOS_FS_MAX_PATH + 1U];
+static char filesystem_validation_buffer[CLONK_FS_MAX_PATH + 1U];
 static uint8_t filesystem_boundary_buffer[2U * 4096U] __attribute__((aligned(4096)));
 
 static inline int64_t syscall2(uint64_t number, uint64_t arg1, uint64_t arg2) {
@@ -59,7 +59,7 @@ static bool write_text(const char *text) {
         if (amount > 256U) {
             amount = 256U;
         }
-        if (syscall2(MYOS_SYS_WRITE, (uint64_t)(uintptr_t)(text + written), amount) != 0) {
+        if (syscall2(CLONK_SYS_WRITE, (uint64_t)(uintptr_t)(text + written), amount) != 0) {
             return false;
         }
         written += amount;
@@ -72,7 +72,7 @@ static bool write_bytes(const void *buffer, size_t length) {
     while (written < length) {
         size_t amount = length - written;
         if (amount > 256U) amount = 256U;
-        if (syscall2(MYOS_SYS_WRITE,
+        if (syscall2(CLONK_SYS_WRITE,
                      (uint64_t)(uintptr_t)((const uint8_t *)buffer + written),
                      amount) != 0) {
             return false;
@@ -83,7 +83,7 @@ static bool write_bytes(const void *buffer, size_t length) {
 }
 
 static bool write_character(char character) {
-    return syscall2(MYOS_SYS_WRITE, (uint64_t)(uintptr_t)&character, 1U) == 0;
+    return syscall2(CLONK_SYS_WRITE, (uint64_t)(uintptr_t)&character, 1U) == 0;
 }
 
 static void write_signed_number(int64_t number) {
@@ -108,17 +108,17 @@ static int syscall_validation_self_test(void) {
     const uint64_t stack_top = 0x00007FFFFFFFE000ULL;
     static const char readable[] = "valid";
 
-    if (syscall2(MYOS_SYS_WRITE, 0xFFFFFFFF80000000ULL, 1U) != -1 ||
-        syscall2(MYOS_SYS_WRITE, 0x0000000000500000ULL, 1U) != -1 ||
-        syscall2(MYOS_SYS_WRITE, user_limit - 1U, 2U) != -1 ||
-        syscall2(MYOS_SYS_WRITE, user_limit - 1U, UINT64_MAX) != -1 ||
-        syscall2(MYOS_SYS_WRITE, stack_top - 1U, 2U) != -1 ||
-        syscall2(MYOS_SYS_WRITE, (uint64_t)(uintptr_t)readable, 257U) != -1 ||
-        syscall2(MYOS_SYS_WRITE, 0x0000000000500000ULL, 0U) != 0 ||
-        syscall2(MYOS_SYS_READ, 0x0000000000500000ULL, 1U) != -1 ||
-        syscall2(MYOS_SYS_READ, (uint64_t)(uintptr_t)readable, 1U) != -1 ||
-        syscall2(MYOS_SYS_READ, (uint64_t)(uintptr_t)&read_validation_buffer, 0U) != -1 ||
-        syscall2(MYOS_SYS_CLEAR, 1U, 0U) != -1 ||
+    if (syscall2(CLONK_SYS_WRITE, 0xFFFFFFFF80000000ULL, 1U) != -1 ||
+        syscall2(CLONK_SYS_WRITE, 0x0000000000500000ULL, 1U) != -1 ||
+        syscall2(CLONK_SYS_WRITE, user_limit - 1U, 2U) != -1 ||
+        syscall2(CLONK_SYS_WRITE, user_limit - 1U, UINT64_MAX) != -1 ||
+        syscall2(CLONK_SYS_WRITE, stack_top - 1U, 2U) != -1 ||
+        syscall2(CLONK_SYS_WRITE, (uint64_t)(uintptr_t)readable, 257U) != -1 ||
+        syscall2(CLONK_SYS_WRITE, 0x0000000000500000ULL, 0U) != 0 ||
+        syscall2(CLONK_SYS_READ, 0x0000000000500000ULL, 1U) != -1 ||
+        syscall2(CLONK_SYS_READ, (uint64_t)(uintptr_t)readable, 1U) != -1 ||
+        syscall2(CLONK_SYS_READ, (uint64_t)(uintptr_t)&read_validation_buffer, 0U) != -1 ||
+        syscall2(CLONK_SYS_CLEAR, 1U, 0U) != -1 ||
         syscall2(0xFFFFFFFFU, 0U, 0U) != -1) {
         return -1;
     }
@@ -126,38 +126,38 @@ static int syscall_validation_self_test(void) {
 }
 
 static int64_t fs_open(const char *path, uint32_t flags) {
-    return syscall2(MYOS_SYS_FS_OPEN, (uint64_t)(uintptr_t)path, flags);
+    return syscall2(CLONK_SYS_FS_OPEN, (uint64_t)(uintptr_t)path, flags);
 }
 
 static int64_t fs_read(uint64_t descriptor, void *buffer, size_t length) {
-    return syscall3(MYOS_SYS_FS_READ, descriptor,
+    return syscall3(CLONK_SYS_FS_READ, descriptor,
                    (uint64_t)(uintptr_t)buffer, length);
 }
 
 static int64_t fs_write(uint64_t descriptor, const void *buffer, size_t length) {
-    return syscall3(MYOS_SYS_FS_WRITE, descriptor,
+    return syscall3(CLONK_SYS_FS_WRITE, descriptor,
                     (uint64_t)(uintptr_t)buffer, length);
 }
 
-static int64_t fs_readdir(uint64_t descriptor, myos_fs_dirent *entry) {
-    return syscall2(MYOS_SYS_FS_READDIR, descriptor,
+static int64_t fs_readdir(uint64_t descriptor, clonk_fs_dirent *entry) {
+    return syscall2(CLONK_SYS_FS_READDIR, descriptor,
                     (uint64_t)(uintptr_t)entry);
 }
 
 static int64_t fs_close(uint64_t descriptor) {
-    return syscall2(MYOS_SYS_FS_CLOSE, descriptor, 0U);
+    return syscall2(CLONK_SYS_FS_CLOSE, descriptor, 0U);
 }
 
 static int64_t fs_mkdir(const char *path) {
-    return syscall2(MYOS_SYS_FS_MKDIR, (uint64_t)(uintptr_t)path, 0U);
+    return syscall2(CLONK_SYS_FS_MKDIR, (uint64_t)(uintptr_t)path, 0U);
 }
 
 static int64_t fs_unlink(const char *path) {
-    return syscall2(MYOS_SYS_FS_UNLINK, (uint64_t)(uintptr_t)path, 0U);
+    return syscall2(CLONK_SYS_FS_UNLINK, (uint64_t)(uintptr_t)path, 0U);
 }
 
 static int64_t fs_rmdir(const char *path) {
-    return syscall2(MYOS_SYS_FS_RMDIR, (uint64_t)(uintptr_t)path, 0U);
+    return syscall2(CLONK_SYS_FS_RMDIR, (uint64_t)(uintptr_t)path, 0U);
 }
 
 static int filesystem_syscall_self_test(void) {
@@ -167,49 +167,49 @@ static int filesystem_syscall_self_test(void) {
     static const char test_directory[] = "/USRCHK.DIR";
     static const char test_child[] = "/USRCHK.DIR/CHILD.TMP";
     static const char read_only_buffer[] = "ro";
-    static const myos_fs_dirent read_only_entry;
-    int64_t descriptors[MYOS_FS_HANDLE_LIMIT];
+    static const clonk_fs_dirent read_only_entry;
+    int64_t descriptors[CLONK_FS_HANDLE_LIMIT];
     int64_t descriptor = 0;
     int64_t directory = 0;
     int result = -1;
-    for (size_t i = 0; i < MYOS_FS_HANDLE_LIMIT; ++i) descriptors[i] = 0;
+    for (size_t i = 0; i < CLONK_FS_HANDLE_LIMIT; ++i) descriptors[i] = 0;
 
     filesystem_validation_buffer[0] = '/';
-    for (size_t i = 1; i < MYOS_FS_MAX_PATH; ++i) {
+    for (size_t i = 1; i < CLONK_FS_MAX_PATH; ++i) {
         filesystem_validation_buffer[i] = 'A';
     }
-    filesystem_validation_buffer[MYOS_FS_MAX_PATH] = '\0';
+    filesystem_validation_buffer[CLONK_FS_MAX_PATH] = '\0';
 
     if (fs_open((const char *)(uintptr_t)0xFFFFFFFF80000000ULL,
-                MYOS_FS_OPEN_READ) != MYOS_FS_ERR_PATH ||
+                CLONK_FS_OPEN_READ) != CLONK_FS_ERR_PATH ||
         fs_open((const char *)(uintptr_t)0x0000000000500000ULL,
-                MYOS_FS_OPEN_READ) != MYOS_FS_ERR_PATH ||
-        fs_open(filesystem_validation_buffer, MYOS_FS_OPEN_READ) != MYOS_FS_ERR_PATH ||
-        fs_open(traversal_path, MYOS_FS_OPEN_READ) != MYOS_FS_ERR_PATH ||
-        fs_open("RELATIVE.TXT", MYOS_FS_OPEN_READ) != MYOS_FS_ERR_NOT_FOUND ||
-        fs_open(test_path, 0U) != MYOS_FS_ERR_INVALID ||
-        fs_open(missing_path, MYOS_FS_OPEN_READ) != MYOS_FS_ERR_NOT_FOUND ||
-        fs_read(0U, filesystem_boundary_buffer, 1U) != MYOS_FS_ERR_BAD_HANDLE ||
-        fs_write(0U, filesystem_boundary_buffer, 1U) != MYOS_FS_ERR_BAD_HANDLE ||
-        fs_readdir(0U, (myos_fs_dirent *)filesystem_boundary_buffer) !=
-            MYOS_FS_ERR_BAD_HANDLE ||
-        fs_close(0U) != MYOS_FS_ERR_BAD_HANDLE ||
-        fs_mkdir((const char *)(uintptr_t)0xFFFFFFFF80000000ULL) != MYOS_FS_ERR_PATH ||
-        fs_unlink(missing_path) != MYOS_FS_ERR_NOT_FOUND) {
+                CLONK_FS_OPEN_READ) != CLONK_FS_ERR_PATH ||
+        fs_open(filesystem_validation_buffer, CLONK_FS_OPEN_READ) != CLONK_FS_ERR_PATH ||
+        fs_open(traversal_path, CLONK_FS_OPEN_READ) != CLONK_FS_ERR_PATH ||
+        fs_open("RELATIVE.TXT", CLONK_FS_OPEN_READ) != CLONK_FS_ERR_NOT_FOUND ||
+        fs_open(test_path, 0U) != CLONK_FS_ERR_INVALID ||
+        fs_open(missing_path, CLONK_FS_OPEN_READ) != CLONK_FS_ERR_NOT_FOUND ||
+        fs_read(0U, filesystem_boundary_buffer, 1U) != CLONK_FS_ERR_BAD_HANDLE ||
+        fs_write(0U, filesystem_boundary_buffer, 1U) != CLONK_FS_ERR_BAD_HANDLE ||
+        fs_readdir(0U, (clonk_fs_dirent *)filesystem_boundary_buffer) !=
+            CLONK_FS_ERR_BAD_HANDLE ||
+        fs_close(0U) != CLONK_FS_ERR_BAD_HANDLE ||
+        fs_mkdir((const char *)(uintptr_t)0xFFFFFFFF80000000ULL) != CLONK_FS_ERR_PATH ||
+        fs_unlink(missing_path) != CLONK_FS_ERR_NOT_FOUND) {
         return -1;
     }
 
-    descriptor = fs_open(test_path, MYOS_FS_OPEN_WRITE |
-                                    MYOS_FS_OPEN_CREATE |
-                                    MYOS_FS_OPEN_TRUNCATE);
+    descriptor = fs_open(test_path, CLONK_FS_OPEN_WRITE |
+                                    CLONK_FS_OPEN_CREATE |
+                                    CLONK_FS_OPEN_TRUNCATE);
     if (descriptor <= 0) goto cleanup;
     filesystem_boundary_buffer[4095] = 'A';
     filesystem_boundary_buffer[4096] = 'B';
     if (fs_write((uint64_t)descriptor,
                  (const void *)(uintptr_t)0xFFFFFFFF80000000ULL, 1U) !=
-            MYOS_FS_ERR_INVALID ||
+            CLONK_FS_ERR_INVALID ||
         fs_write((uint64_t)descriptor, filesystem_boundary_buffer + 4095U,
-                 MYOS_FS_MAX_TRANSFER + 1U) != MYOS_FS_ERR_LIMIT ||
+                 CLONK_FS_MAX_TRANSFER + 1U) != CLONK_FS_ERR_LIMIT ||
         fs_write((uint64_t)descriptor, filesystem_boundary_buffer + 4095U,
                  2U) != 2 ||
         fs_close((uint64_t)descriptor) != 0) {
@@ -217,18 +217,18 @@ static int filesystem_syscall_self_test(void) {
     }
     descriptor = 0;
 
-    descriptor = fs_open(test_path, MYOS_FS_OPEN_READ);
+    descriptor = fs_open(test_path, CLONK_FS_OPEN_READ);
     if (descriptor <= 0) goto cleanup;
     if (fs_read((uint64_t)descriptor,
                 (void *)(uintptr_t)0xFFFFFFFF80000000ULL, 1U) !=
-            MYOS_FS_ERR_INVALID ||
+            CLONK_FS_ERR_INVALID ||
         fs_read((uint64_t)descriptor,
-                (void *)(uintptr_t)read_only_buffer, 1U) != MYOS_FS_ERR_INVALID ||
+                (void *)(uintptr_t)read_only_buffer, 1U) != CLONK_FS_ERR_INVALID ||
         fs_read((uint64_t)descriptor, filesystem_boundary_buffer,
-                MYOS_FS_MAX_TRANSFER + 1U) != MYOS_FS_ERR_LIMIT ||
+                CLONK_FS_MAX_TRANSFER + 1U) != CLONK_FS_ERR_LIMIT ||
         fs_readdir((uint64_t)descriptor,
-                   (myos_fs_dirent *)filesystem_boundary_buffer) !=
-            MYOS_FS_ERR_NOT_DIRECTORY ||
+                   (clonk_fs_dirent *)filesystem_boundary_buffer) !=
+            CLONK_FS_ERR_NOT_DIRECTORY ||
         fs_read((uint64_t)descriptor, filesystem_boundary_buffer + 4095U,
                 2U) != 2 ||
         filesystem_boundary_buffer[4095] != 'A' ||
@@ -237,42 +237,42 @@ static int filesystem_syscall_self_test(void) {
         fs_close((uint64_t)descriptor) != 0) {
         goto cleanup;
     }
-    if (fs_close((uint64_t)descriptor) != MYOS_FS_ERR_BAD_HANDLE) goto cleanup;
+    if (fs_close((uint64_t)descriptor) != CLONK_FS_ERR_BAD_HANDLE) goto cleanup;
     descriptor = 0;
 
-    directory = fs_open("///", MYOS_FS_OPEN_READ);
+    directory = fs_open("///", CLONK_FS_OPEN_READ);
     if (directory <= 0 ||
         fs_readdir((uint64_t)directory,
-                   (myos_fs_dirent *)(uintptr_t)&read_only_entry) !=
-            MYOS_FS_ERR_INVALID ||
+                   (clonk_fs_dirent *)(uintptr_t)&read_only_entry) !=
+            CLONK_FS_ERR_INVALID ||
         fs_readdir((uint64_t)directory,
-                   (myos_fs_dirent *)(filesystem_boundary_buffer + 4096U -
-                                      sizeof(myos_fs_dirent) / 2U)) != 1 ||
+                   (clonk_fs_dirent *)(filesystem_boundary_buffer + 4096U -
+                                      sizeof(clonk_fs_dirent) / 2U)) != 1 ||
         fs_close((uint64_t)directory) != 0) {
         goto cleanup;
     }
     directory = 0;
 
-    for (size_t i = 0; i < MYOS_FS_HANDLE_LIMIT; ++i) {
-        descriptors[i] = fs_open(test_path, MYOS_FS_OPEN_READ);
+    for (size_t i = 0; i < CLONK_FS_HANDLE_LIMIT; ++i) {
+        descriptors[i] = fs_open(test_path, CLONK_FS_OPEN_READ);
         if (descriptors[i] <= 0) goto cleanup;
     }
-    if (fs_open(test_path, MYOS_FS_OPEN_READ) != MYOS_FS_ERR_LIMIT) goto cleanup;
-    for (size_t i = 0; i < MYOS_FS_HANDLE_LIMIT; ++i) {
+    if (fs_open(test_path, CLONK_FS_OPEN_READ) != CLONK_FS_ERR_LIMIT) goto cleanup;
+    for (size_t i = 0; i < CLONK_FS_HANDLE_LIMIT; ++i) {
         if (fs_close((uint64_t)descriptors[i]) != 0) goto cleanup;
         descriptors[i] = 0;
     }
 
     if (fs_unlink(test_path) != 0 ||
-        fs_open(test_path, MYOS_FS_OPEN_READ) != MYOS_FS_ERR_NOT_FOUND) {
+        fs_open(test_path, CLONK_FS_OPEN_READ) != CLONK_FS_ERR_NOT_FOUND) {
         goto cleanup;
     }
 
     if (fs_mkdir(test_directory) != 0) goto cleanup;
-    descriptor = fs_open(test_child, MYOS_FS_OPEN_WRITE | MYOS_FS_OPEN_CREATE);
+    descriptor = fs_open(test_child, CLONK_FS_OPEN_WRITE | CLONK_FS_OPEN_CREATE);
     if (descriptor <= 0 || fs_close((uint64_t)descriptor) != 0) goto cleanup;
     descriptor = 0;
-    if (fs_rmdir(test_directory) != MYOS_FS_ERR_NOT_EMPTY ||
+    if (fs_rmdir(test_directory) != CLONK_FS_ERR_NOT_EMPTY ||
         fs_unlink(test_child) != 0 ||
         fs_rmdir(test_directory) != 0) {
         goto cleanup;
@@ -282,7 +282,7 @@ static int filesystem_syscall_self_test(void) {
 cleanup:
     if (descriptor > 0) (void)fs_close((uint64_t)descriptor);
     if (directory > 0) (void)fs_close((uint64_t)directory);
-    for (size_t i = 0; i < MYOS_FS_HANDLE_LIMIT; ++i) {
+    for (size_t i = 0; i < CLONK_FS_HANDLE_LIMIT; ++i) {
         if (descriptors[i] > 0) (void)fs_close((uint64_t)descriptors[i]);
     }
     if (result != 0) {
@@ -299,7 +299,7 @@ static void print_help(void) {
         "  help          Show this help\n"
         "  echo TEXT     Print TEXT\n"
         "  clear         Clear the console\n"
-        "  version       Show the MyOS version\n"
+        "  version       Show the Clonk version\n"
         "  ls [PATH]     List a directory\n"
         "  cat PATH      Print a file\n"
         "  touch PATH    Create an empty file\n"
@@ -327,19 +327,19 @@ static char *next_token(char **cursor) {
 
 static const char *filesystem_error_text(int64_t error) {
     switch (error) {
-        case MYOS_FS_ERR_INVALID: return "invalid arguments or buffer";
-        case MYOS_FS_ERR_PATH: return "invalid path";
-        case MYOS_FS_ERR_NOT_FOUND: return "path not found";
-        case MYOS_FS_ERR_NOT_DIRECTORY: return "not a directory";
-        case MYOS_FS_ERR_IS_DIRECTORY: return "is a directory";
-        case MYOS_FS_ERR_EXISTS: return "already exists";
-        case MYOS_FS_ERR_READ_ONLY: return "read-only filesystem";
-        case MYOS_FS_ERR_NO_MEMORY: return "out of memory";
-        case MYOS_FS_ERR_NO_SPACE: return "filesystem is full";
-        case MYOS_FS_ERR_BAD_HANDLE: return "invalid descriptor";
-        case MYOS_FS_ERR_LIMIT: return "resource or transfer limit reached";
-        case MYOS_FS_ERR_IO: return "filesystem I/O error";
-        case MYOS_FS_ERR_NOT_EMPTY: return "directory is not empty";
+        case CLONK_FS_ERR_INVALID: return "invalid arguments or buffer";
+        case CLONK_FS_ERR_PATH: return "invalid path";
+        case CLONK_FS_ERR_NOT_FOUND: return "path not found";
+        case CLONK_FS_ERR_NOT_DIRECTORY: return "not a directory";
+        case CLONK_FS_ERR_IS_DIRECTORY: return "is a directory";
+        case CLONK_FS_ERR_EXISTS: return "already exists";
+        case CLONK_FS_ERR_READ_ONLY: return "read-only filesystem";
+        case CLONK_FS_ERR_NO_MEMORY: return "out of memory";
+        case CLONK_FS_ERR_NO_SPACE: return "filesystem is full";
+        case CLONK_FS_ERR_BAD_HANDLE: return "invalid descriptor";
+        case CLONK_FS_ERR_LIMIT: return "resource or transfer limit reached";
+        case CLONK_FS_ERR_IO: return "filesystem I/O error";
+        case CLONK_FS_ERR_NOT_EMPTY: return "directory is not empty";
         default: return "filesystem operation failed";
     }
 }
@@ -352,7 +352,7 @@ static void print_filesystem_error(const char *command, int64_t error) {
 }
 
 static void command_ls(const char *path) {
-    int64_t descriptor = fs_open(path, MYOS_FS_OPEN_READ);
+    int64_t descriptor = fs_open(path, CLONK_FS_OPEN_READ);
     if (descriptor <= 0) {
         print_filesystem_error("ls", descriptor);
         return;
@@ -360,7 +360,7 @@ static void command_ls(const char *path) {
 
     size_t count = 0;
     bool failed = false;
-    myos_fs_dirent entry;
+    clonk_fs_dirent entry;
     for (;;) {
         int64_t rc = fs_readdir((uint64_t)descriptor, &entry);
         if (rc == 0) break;
@@ -370,8 +370,8 @@ static void command_ls(const char *path) {
             break;
         }
         if (rc != 1 || entry.name[0] == '\0' ||
-            (entry.type != MYOS_FS_TYPE_FILE && entry.type != MYOS_FS_TYPE_DIR)) {
-            print_filesystem_error("ls", MYOS_FS_ERR_OPERATION);
+            (entry.type != CLONK_FS_TYPE_FILE && entry.type != CLONK_FS_TYPE_DIR)) {
+            print_filesystem_error("ls", CLONK_FS_ERR_OPERATION);
             failed = true;
             break;
         }
@@ -381,17 +381,17 @@ static void command_ls(const char *path) {
             continue;
         }
         (void)write_text(entry.name);
-        (void)write_text(entry.type == MYOS_FS_TYPE_DIR ? "/\n" : "\n");
+        (void)write_text(entry.type == CLONK_FS_TYPE_DIR ? "/\n" : "\n");
         ++count;
     }
     if (count == 0U && !failed) (void)write_text("(empty)\n");
     if (fs_close((uint64_t)descriptor) != 0) {
-        print_filesystem_error("ls", MYOS_FS_ERR_BAD_HANDLE);
+        print_filesystem_error("ls", CLONK_FS_ERR_BAD_HANDLE);
     }
 }
 
 static void command_cat(const char *path) {
-    int64_t descriptor = fs_open(path, MYOS_FS_OPEN_READ);
+    int64_t descriptor = fs_open(path, CLONK_FS_OPEN_READ);
     if (descriptor <= 0) {
         print_filesystem_error("cat", descriptor);
         return;
@@ -402,7 +402,7 @@ static void command_cat(const char *path) {
         int64_t rc = fs_read((uint64_t)descriptor, buffer, sizeof(buffer));
         if (rc == 0) break;
         if (rc < 0 || (uint64_t)rc > sizeof(buffer)) {
-            print_filesystem_error("cat", rc < 0 ? rc : MYOS_FS_ERR_OPERATION);
+            print_filesystem_error("cat", rc < 0 ? rc : CLONK_FS_ERR_OPERATION);
             break;
         }
         if (!write_bytes(buffer, (size_t)rc)) {
@@ -412,18 +412,18 @@ static void command_cat(const char *path) {
     }
     (void)write_text("\n");
     if (fs_close((uint64_t)descriptor) != 0) {
-        print_filesystem_error("cat", MYOS_FS_ERR_BAD_HANDLE);
+        print_filesystem_error("cat", CLONK_FS_ERR_BAD_HANDLE);
     }
 }
 
 static void command_touch(const char *path) {
-    int64_t descriptor = fs_open(path, MYOS_FS_OPEN_WRITE | MYOS_FS_OPEN_CREATE);
+    int64_t descriptor = fs_open(path, CLONK_FS_OPEN_WRITE | CLONK_FS_OPEN_CREATE);
     if (descriptor <= 0) {
         print_filesystem_error("touch", descriptor);
         return;
     }
     if (fs_close((uint64_t)descriptor) != 0) {
-        print_filesystem_error("touch", MYOS_FS_ERR_BAD_HANDLE);
+        print_filesystem_error("touch", CLONK_FS_ERR_BAD_HANDLE);
         return;
     }
     (void)write_text("created ");
@@ -432,8 +432,8 @@ static void command_touch(const char *path) {
 }
 
 static void command_write(const char *path, const char *text) {
-    int64_t descriptor = fs_open(path, MYOS_FS_OPEN_WRITE | MYOS_FS_OPEN_CREATE |
-                                      MYOS_FS_OPEN_TRUNCATE);
+    int64_t descriptor = fs_open(path, CLONK_FS_OPEN_WRITE | CLONK_FS_OPEN_CREATE |
+                                      CLONK_FS_OPEN_TRUNCATE);
     if (descriptor <= 0) {
         print_filesystem_error("write", descriptor);
         return;
@@ -444,18 +444,18 @@ static void command_write(const char *path, const char *text) {
     bool succeeded = true;
     while (offset < length) {
         size_t amount = length - offset;
-        if (amount > MYOS_FS_MAX_TRANSFER) amount = MYOS_FS_MAX_TRANSFER;
+        if (amount > CLONK_FS_MAX_TRANSFER) amount = CLONK_FS_MAX_TRANSFER;
         int64_t written = fs_write((uint64_t)descriptor, text + offset, amount);
         if (written <= 0 || (uint64_t)written > amount) {
             print_filesystem_error("write",
-                                   written < 0 ? written : MYOS_FS_ERR_OPERATION);
+                                   written < 0 ? written : CLONK_FS_ERR_OPERATION);
             succeeded = false;
             break;
         }
         offset += (size_t)written;
     }
     if (fs_close((uint64_t)descriptor) != 0) {
-        print_filesystem_error("write", MYOS_FS_ERR_BAD_HANDLE);
+        print_filesystem_error("write", CLONK_FS_ERR_BAD_HANDLE);
         succeeded = false;
     }
     if (succeeded) {
@@ -512,20 +512,20 @@ static void command_run(void) {
     size_t count = 0U;
     size_t successful = 0U;
 
-    if (syscall2(MYOS_SYS_SPAWN, (uint64_t)(uintptr_t)"/boot/missing.elf",
+    if (syscall2(CLONK_SYS_SPAWN, (uint64_t)(uintptr_t)"/boot/missing.elf",
                  0U) != -3 ||
-        syscall2(MYOS_SYS_SPAWN,
+        syscall2(CLONK_SYS_SPAWN,
                  (uint64_t)(uintptr_t)"/boot/sched-invalid.elf", 0U) != -1 ||
-        syscall2(MYOS_SYS_SPAWN, 0xFFFFFFFF80000000ULL, 0U) != -1 ||
-        syscall2(MYOS_SYS_WAIT, UINT64_MAX, 0U) != -1 ||
-        syscall2(MYOS_SYS_GETPID, 1U, 0U) != -1 ||
-        syscall2(MYOS_SYS_YIELD, 1U, 0U) != -1) {
+        syscall2(CLONK_SYS_SPAWN, 0xFFFFFFFF80000000ULL, 0U) != -1 ||
+        syscall2(CLONK_SYS_WAIT, UINT64_MAX, 0U) != -1 ||
+        syscall2(CLONK_SYS_GETPID, 1U, 0U) != -1 ||
+        syscall2(CLONK_SYS_YIELD, 1U, 0U) != -1) {
         (void)write_text("Process syscall validation failed.\n");
         return;
     }
 
     for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
-        int64_t pid = syscall2(MYOS_SYS_SPAWN,
+        int64_t pid = syscall2(CLONK_SYS_SPAWN,
                                (uint64_t)(uintptr_t)paths[i], 0U);
         if (pid <= 0) {
             (void)write_text("Process creation failed: ");
@@ -536,14 +536,14 @@ static void command_run(void) {
         pids[count++] = pid;
         ++successful;
         if (i == 0U &&
-            syscall2(MYOS_SYS_WAIT, (uint64_t)pid,
+            syscall2(CLONK_SYS_WAIT, (uint64_t)pid,
                      0xFFFFFFFF80000000ULL) != -1) {
             (void)write_text("Invalid wait buffer check failed.\n");
         }
     }
 
     if (successful != 7U ||
-        syscall2(MYOS_SYS_SPAWN, (uint64_t)(uintptr_t)paths[0], 0U) != -11) {
+        syscall2(CLONK_SYS_SPAWN, (uint64_t)(uintptr_t)paths[0], 0U) != -11) {
         (void)write_text("Process table exhaustion check failed.\n");
     } else {
         (void)write_text("Process table limit check passed.\n");
@@ -551,7 +551,7 @@ static void command_run(void) {
 
     for (size_t i = 0; i < count; ++i) {
         int64_t status = INT64_MIN;
-        int64_t waited = syscall2(MYOS_SYS_WAIT, (uint64_t)pids[i],
+        int64_t waited = syscall2(CLONK_SYS_WAIT, (uint64_t)pids[i],
                                   (uint64_t)(uintptr_t)&status);
         (void)write_text("wait pid=");
         write_signed_number(pids[i]);
@@ -645,13 +645,13 @@ static void run_command(char *line) {
         command_run();
     } else if (strings_equal(command, command_length, "clear") &&
                *arguments == '\0') {
-        (void)syscall0(MYOS_SYS_CLEAR);
+        (void)syscall0(CLONK_SYS_CLEAR);
     } else if (strings_equal(command, command_length, "version") &&
                *arguments == '\0') {
-        (void)write_text("MyOS v0.1.1 (x86_64 Long Mode Bare-Metal)\n");
+        (void)write_text("Clonk v0.1.1 (x86_64 Long Mode Bare-Metal)\n");
     } else if (strings_equal(command, command_length, "exit") &&
                *arguments == '\0') {
-        (void)syscall0(MYOS_SYS_EXIT);
+        (void)syscall0(CLONK_SYS_EXIT);
     } else if (strings_equal(command, command_length, "clear") ||
                strings_equal(command, command_length, "version") ||
                strings_equal(command, command_length, "run") ||
@@ -669,13 +669,13 @@ static void run_shell(void) {
         size_t length = 0;
         bool too_long = false;
         input_buffer[0] = '\0';
-        (void)write_text("MyOS$ ");
+        (void)write_text("Clonk$ ");
 
         for (;;) {
             char character;
-            if (syscall2(MYOS_SYS_READ, (uint64_t)(uintptr_t)&character, 1U) != 1) {
+            if (syscall2(CLONK_SYS_READ, (uint64_t)(uintptr_t)&character, 1U) != 1) {
                 (void)write_text("\nInput unavailable; returning to the kernel shell.\n");
-                (void)syscall0(MYOS_SYS_EXIT);
+                (void)syscall0(CLONK_SYS_EXIT);
                 for (;;) __asm__ volatile ("pause");
             }
 
@@ -694,7 +694,7 @@ static void run_shell(void) {
                     too_long = false;
                     length = 0;
                     input_buffer[0] = '\0';
-                    (void)write_text("\nMyOS$ ");
+                    (void)write_text("\nClonk$ ");
                 } else if (length > 0U) {
                     input_buffer[--length] = '\0';
                     (void)write_character('\b');
@@ -722,7 +722,7 @@ void _start(void) {
     static const char filesystem_validation_passed[] =
         "USER: filesystem syscall validation passed.\n";
     static const char banner[] =
-        "MyOS userspace shell\n"
+        "CLONK userspace shell\n"
         "Type help for available commands.\n";
 
     if (syscall_validation_self_test() != 0) {
@@ -735,7 +735,7 @@ void _start(void) {
     } else {
         (void)write_text(filesystem_validation_passed);
     }
-#ifdef MYOS_TEST_SUPERVISOR_FAULT
+#ifdef CLONK_TEST_SUPERVISOR_FAULT
     (void)*(volatile uint64_t *)(uintptr_t)0xFFFFFFFF80000000ULL;
 #endif
     (void)write_text(banner);

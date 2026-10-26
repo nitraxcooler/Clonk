@@ -14,7 +14,7 @@ static inline int64_t syscall2(uint64_t number, uint64_t arg1, uint64_t arg2) {
 
 void _start(void) {
     static const char message[] = "SCHED-FAULT\n";
-    (void)syscall2(MYOS_SYS_WRITE, (uint64_t)(uintptr_t)message,
+    (void)syscall2(CLONK_SYS_WRITE, (uint64_t)(uintptr_t)message,
                    sizeof(message) - 1U);
     __asm__ volatile ("ud2");
     for (;;) __asm__ volatile ("pause");

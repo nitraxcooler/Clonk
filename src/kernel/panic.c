@@ -92,7 +92,7 @@ static void panic_render_header(const char *reason) {
     (void)reason;
     panic_draw_centered("KERNEL PANIC", 28, 0xFFFFFF);
 
-    panic_draw_string("MyOS has encountered a fatal kernel exception.", 32, 72, 0xFFFFFF, 0x000000);
+    panic_draw_string("CLONK has encountered a fatal kernel exception.", 32, 72, 0xFFFFFF, 0x000000);
     panic_draw_string("Reason: ", 32, 110, 0xFFDDDD, 0x000000);
     panic_draw_string(reason, 32 + 8 * 8, 110, 0xFFFFFF, 0x000000);
 }

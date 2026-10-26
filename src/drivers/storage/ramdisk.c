@@ -71,7 +71,7 @@ static int is_userspace_module(const char *path) {
 static int is_ahci_root_marker(const struct limine_file *file) {
     if (file == NULL) return 0;
     const char *string = file->string;
-    const char *expected = "myos.storage=ahci";
+    const char *expected = "clonk.storage=ahci";
     if (string != NULL) {
         size_t i = 0;
         while (string[i] != '\0' && expected[i] != '\0' &&

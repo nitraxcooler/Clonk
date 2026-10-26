@@ -133,7 +133,7 @@ void keyboard_process_pending(void) {
         shell_handle_command(kernel_line);
         kernel_line_length = 0;
         kernel_line[0] = '\0';
-        kprint("MyOS:> ", 0x00FFFFU);
+        kprint("Clonk:> ", 0x00FFFFU);
     } else if (character == '\b') {
         if (kernel_line_length > 0U) {
             --kernel_line_length;

@@ -1,5 +1,5 @@
-#ifndef MYOS_KEYBOARD_H
-#define MYOS_KEYBOARD_H
+#ifndef CLONK_KEYBOARD_H
+#define CLONK_KEYBOARD_H
 
 #include <stdbool.h>
 

@@ -139,7 +139,7 @@ static void cmd_mem(void) {
         kprint("Memory manager not initialized.\n", SHELL_COL_ERR);
         return;
     }
-    kprint("MyOS Memory Information\n", SHELL_COL_OK);
+    kprint("Clonk Memory Information\n", SHELL_COL_OK);
     kprint("Page size:       ", SHELL_TOK_WHITE); shell_print_u64(PMM_PAGE_SIZE);
     kprint(" bytes\n", SHELL_TOK_WHITE);
     kprint("Total memory:    ", SHELL_TOK_WHITE);
@@ -417,7 +417,7 @@ void shell_handle_command(const char *cmdline) {
     } else if (strcmp(cmd, "clear") == 0) {
         kclear();
     } else if (strcmp(cmd, "version") == 0) {
-        kprint("MyOS v0.1.1 (x86_64 Long Mode Bare-Metal)\n", SHELL_COL_OK);
+        kprint("Clonk v0.1.1 (x86_64 Long Mode Bare-Metal)\n", SHELL_COL_OK);
     } else if (strcmp(cmd, "echo") == 0) {
         for (int i = 1; i < n; ++i) {
             if (i != 1) kprint(" ", SHELL_TOK_WHITE);

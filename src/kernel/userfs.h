@@ -1,5 +1,5 @@
-#ifndef MYOS_KERNEL_USERFS_H
-#define MYOS_KERNEL_USERFS_H
+#ifndef CLONK_KERNEL_USERFS_H
+#define CLONK_KERNEL_USERFS_H
 
 #include <stdbool.h>
 #include <stdint.h>

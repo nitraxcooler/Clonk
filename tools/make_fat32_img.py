@@ -59,8 +59,8 @@ def make(out=OUT, nsectors=NSECTORS, ahci_test=False):
         offset = (RESERVED + index * fat_sectors) * SECTOR
         image[offset:offset + len(fat)] = fat
 
-    hello = b"Hello, MyOS FAT32 world!\n"
-    welcome = b"Welcome to MyOS. FAT32 is working.\n"
+    hello = b"Hello, Clonk FAT32 world!\n"
+    welcome = b"Welcome to Clonk. FAT32 is working.\n"
     test = bytes(range(16))
 
     root_offset = cluster_sector(ROOT_CL) * SECTOR
@@ -77,7 +77,7 @@ def make(out=OUT, nsectors=NSECTORS, ahci_test=False):
 
     boot = bytearray(SECTOR)
     boot[0:3] = b"\xEB\x58\x90"
-    boot[3:11] = b"MYOSFAT3"
+    boot[3:11] = b"CLONKFS3"
     struct.pack_into("<H", boot, 11, SECTOR)
     boot[13] = SPC
     struct.pack_into("<H", boot, 14, RESERVED)
@@ -91,7 +91,7 @@ def make(out=OUT, nsectors=NSECTORS, ahci_test=False):
     boot[64] = 0x80
     boot[66] = 0x29
     struct.pack_into("<I", boot, 67, 0x12345678)
-    boot[71:82] = b"MyOS FAT32 "
+    boot[71:82] = b"CLONKFS    "
     boot[82:90] = b"FAT32   "
     boot[90:93] = b"\x90\xEB\xFE"
     boot[510:512] = b"\x55\xAA"
@@ -108,7 +108,7 @@ def make(out=OUT, nsectors=NSECTORS, ahci_test=False):
     image[7 * SECTOR:8 * SECTOR] = fsinfo
 
     if ahci_test:
-        marker = b"MYOS-AHCI-END"
+        marker = b"CLONK-AHCI-END"
         image[-SECTOR:-SECTOR + len(marker)] = marker
 
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)

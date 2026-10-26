@@ -2,6 +2,9 @@
 
 # Legacy outputs from the pre-build-directory Makefile.
 /obj_*.o
+/clonk.iso
+/iso_root/boot/clonk.elf
+# Keep ignoring artifacts from older local builds.
 /myos.iso
 /iso_root/boot/myos.elf
 /iso_root/boot/limine-bios-cd.bin

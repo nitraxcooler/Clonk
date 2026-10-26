@@ -1,8 +1,8 @@
-# MyOS
+# Clonk
 
 > A hobby operating system built from scratch in C for x86-64, booted with Limine.
 
-MyOS is an actively developed learning project for operating-system
+Clonk is an actively developed learning project for operating-system
 development, from boot and hardware interfaces through memory management,
 filesystems, and a small Ring 3 userspace. It is not a general-purpose or
 production-ready operating system.
@@ -34,7 +34,7 @@ kernel shell when `/init` exits. The runtime `version` command reports
 - PS/2 keyboard input and a custom 8x16 bitmap font for framebuffer text
 - QEMU build and test workflow
 
-MyOS provides an early **single-CPU process-management foundation**. Its
+Clonk provides an early **single-CPU process-management foundation**. Its
 syscall ABI and process model are custom; it does not provide POSIX
 compatibility, a complete userspace runtime, or a general-purpose process
 environment.
@@ -254,7 +254,7 @@ Screenshots coming soon.
 ## Project Structure
 
 ```text
-MyOS/
+Clonk/
 ├── src/
 │   ├── abi/                # Shared syscall ABI
 │   ├── arch/x86_64/        # GDT, IDT, interrupt and privilege-transition code
@@ -313,7 +313,7 @@ make clean && make run PYTHON=/c/path/to/python.exe
 
 `make clean` removes the generated `build/` directory. The run target builds
 the kernel and userspace programs, creates the FAT32 image and bootable ISO at
-`build/myos.iso`, then starts QEMU. The Makefile also selects system `cc` and
+`build/clonk.iso`, then starts QEMU. The Makefile also selects system `cc` and
 `ld` on non-Windows hosts; compatible x86-64 ELF tools, Python 3, `xorriso`,
 and QEMU are required there.
 
@@ -345,7 +345,7 @@ tested separately.
 
 ## Development Philosophy
 
-MyOS is developed incrementally: build a subsystem, keep its interfaces
+Clonk is developed incrementally: build a subsystem, keep its interfaces
 small, then validate it in a controlled environment before relying on it for
 the next layer.
 
@@ -366,7 +366,7 @@ Ring 3 `/init` and syscalls
  ↓
 Bounded process management and round-robin scheduling
  ↓
-MyBread and MyGUI
+ClonkFS and ClonkGUI
 ```
 
 QEMU is the primary development and regression environment. Passing QEMU
@@ -442,7 +442,7 @@ injected ATA timeouts, and crash recovery were not tested.
 
 ### In Progress
 
-- MyBread native filesystem design and implementation
+- ClonkFS native filesystem design and implementation
 - Loading user executables from the mounted filesystem
 
 ### Planned
@@ -451,7 +451,7 @@ injected ATA timeouts, and crash recovery were not tested.
 - Broader storage-driver and hardware support beyond the tested QEMU AHCI path
 - Additional userspace programs and runtime support
 - Networking and audio
-- MyGUI graphical desktop environment
+- ClonkGUI graphical desktop environment
 
 ### Current limitations
 
@@ -480,26 +480,26 @@ information, error code, instruction pointer, and register state; page faults
 also report CR2 and decode relevant error-code bits. The kernel-shell `panic`
 and `pfault` commands deliberately exercise these diagnostic paths.
 
-## Why “MyOS”?
+## Why “Clonk”?
 
 The project name inspired a few related names:
 
-- **MyOS** — the operating system
-- **MyBread** — the planned native filesystem
-- **MyGUI** — the planned graphical desktop
+- **Clonk** — the operating system
+- **ClonkFS** — the planned native filesystem
+- **ClonkGUI** — the planned graphical desktop
 
 The names stuck.
 
 ## Contributing
 
-MyOS is a collaborative learning project. Read [`AGENTS.md`](AGENTS.md)
+Clonk is a collaborative learning project. Read [`AGENTS.md`](AGENTS.md)
 before contributing. Preserve the existing architecture, keep changes
 focused, and test in QEMU when practical. Coordinate major architectural
 decisions with the human maintainers.
 
 ## License
 
-MyOS is licensed under the MIT License; see [`LICENSE`](LICENSE).
+Clonk is licensed under the MIT License; see [`LICENSE`](LICENSE).
 
 ---
 

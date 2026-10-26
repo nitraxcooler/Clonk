@@ -1,8 +1,8 @@
-# MyOS — AI Development Instructions
+# Clonk — AI Development Instructions
 
 ## Project
 
-MyOS is a custom hobby operating system written primarily in C/C++ and designed to eventually run on real x86-64 hardware.
+Clonk is a custom hobby operating system written primarily in C/C++ and designed to eventually run on real x86-64 hardware.
 
 The project is developed collaboratively by human programmers, designers, and AI coding agents.
 
@@ -29,7 +29,7 @@ The human developers make the architectural and design decisions. AI agents are 
 * Custom keyboard/input code exists.
 * Interrupt/IDT code exists.
 * A proper kernel panic system is planned.
-* A custom filesystem called **MyBread** is planned.
+* A custom filesystem called **ClonkFS** is planned.
 
 Inspect the repository before making assumptions about the current implementation.
 
@@ -77,7 +77,7 @@ Do not perform unrelated cleanup or refactoring during feature work unless expli
 
 ### 5. Explain unfamiliar low-level concepts
 
-MyOS is also a learning project.
+Clonk is also a learning project.
 
 When implementing unfamiliar OS concepts, explain:
 
@@ -93,7 +93,7 @@ Do not simply dump unexplained kernel code.
 
 ## C/C++ Kernel Rules
 
-MyOS is a freestanding kernel environment.
+Clonk is a freestanding kernel environment.
 
 Do not assume a normal desktop C/C++ runtime exists.
 
@@ -108,7 +108,7 @@ Be careful with:
 * libc assumptions
 * threading assumptions
 
-Before introducing a C++ feature that may require runtime support, verify that MyOS provides the required support.
+Before introducing a C++ feature that may require runtime support, verify that Clonk provides the required support.
 
 The existing project may contain C code. Do not automatically rename `.c` files to `.cpp` or convert the entire project to C++.
 
@@ -118,13 +118,13 @@ C-to-C++ migration should be deliberate and incremental.
 
 ## Limine
 
-MyOS currently uses Limine.
+Clonk currently uses Limine.
 
 Do not replace Limine unless explicitly instructed.
 
-Treat Limine as third-party/boot infrastructure rather than MyOS application logic.
+Treat Limine as third-party/boot infrastructure rather than Clonk application logic.
 
-Do not modify third-party Limine code to solve problems that belong in MyOS unless there is a specific reason.
+Do not modify third-party Limine code to solve problems that belong in Clonk unless there is a specific reason.
 
 ---
 
@@ -172,7 +172,7 @@ Keep hardware access separate from higher-level kernel logic where practical.
 
 ## Graphics and Fonts
 
-MyOS has a custom font system.
+Clonk has a custom font system.
 
 The existing font's spacing and proportions are intentional.
 
@@ -192,7 +192,7 @@ as the graphics subsystem grows.
 
 ## Kernel Panic
 
-A proper MyOS kernel panic system is planned.
+A proper Clonk kernel panic system is planned.
 
 The intended panic screen:
 
@@ -231,11 +231,11 @@ It should eventually trigger the real panic path rather than merely displaying a
 
 ---
 
-## MyBread
+## ClonkFS
 
-MyBread is the planned native MyOS filesystem.
+ClonkFS is the planned native Clonk filesystem.
 
-Do not implement MyBread as a joke-only feature. It must have a real filesystem design.
+Do not implement ClonkFS as a joke-only feature. It must have a real filesystem design.
 
 Potential long-term features:
 
@@ -256,7 +256,7 @@ Do not attempt to implement a production-grade filesystem in one change.
 
 A minimal read-only implementation may be preferable before implementing writes.
 
-MyBread may use humorous user-facing health terminology such as:
+ClonkFS may use humorous user-facing health terminology such as:
 
 * Fresh
 * Stale
@@ -280,7 +280,7 @@ A feature is not considered complete merely because it compiles.
 
 Whenever practical:
 
-1. Build MyOS.
+1. Build Clonk.
 2. Boot it in QEMU.
 3. Test the affected functionality.
 4. Record failures.
@@ -295,7 +295,7 @@ Remember that QEMU success does not guarantee physical hardware compatibility.
 
 ## Physical Hardware
 
-MyOS is eventually intended to run on real x86-64 hardware.
+Clonk is eventually intended to run on real x86-64 hardware.
 
 Avoid unnecessary QEMU-specific assumptions.
 
@@ -333,15 +333,15 @@ filesystem
 files/directories
 ```
 
-Eventually MyOS may support:
+Eventually Clonk may support:
 
 ```text
 FAT32
 exFAT
-MyBread
+ClonkFS
 ```
 
-Do not tightly couple the shell directly to MyBread.
+Do not tightly couple the shell directly to ClonkFS.
 
 ---
 
@@ -406,7 +406,7 @@ Prefer small, focused commits.
 Before adding a dependency:
 
 1. Explain what it provides.
-2. Explain why MyOS needs it.
+2. Explain why Clonk needs it.
 3. Determine whether it works in a freestanding kernel environment.
 4. Consider whether implementing the required functionality internally would be more appropriate.
 
@@ -471,7 +471,7 @@ Block storage
     ↓
 VFS
     ↓
-MyBread
+ClonkFS
     ↓
 Networking
     ↓
@@ -493,6 +493,6 @@ Do not blindly generate. Explain.
 Do not claim success. Test.
 Do not take control. Collaborate.**
 
-MyOS belongs to its human developers.
+Clonk belongs to its human developers.
 
 AI exists to help build it, understand it, debug it, and improve it.

@@ -74,9 +74,9 @@ static struct limine_file *find_init_module(void) {
 }
 
 static bool copy_executable_path(uint64_t address_space, uint64_t user_path,
-                                char path[MYOS_FS_MAX_PATH]) {
+                                char path[CLONK_FS_MAX_PATH]) {
     if (user_path >= 0x0000800000000000ULL) return false;
-    for (size_t i = 0; i < MYOS_FS_MAX_PATH; ++i) {
+    for (size_t i = 0; i < CLONK_FS_MAX_PATH; ++i) {
         if ((uint64_t)i > 0x0000800000000000ULL - user_path ||
             !user_copy_from(address_space, &path[i], user_path + i, 1U)) {
             return false;
@@ -140,7 +140,7 @@ int64_t syscall_dispatch(const uint64_t *saved_registers) {
     if (address_space == 0U || vm_get_active_pml4() != address_space) {
         kernel_panic("SYSCALL_WITHOUT_CURRENT_PROCESS");
     }
-    if (number == MYOS_SYS_WRITE) {
+    if (number == CLONK_SYS_WRITE) {
         if (arg2 > 256U || !vm_user_range_valid(address_space, arg1, arg2)) {
             return -1;
         }
@@ -159,7 +159,7 @@ int64_t syscall_dispatch(const uint64_t *saved_registers) {
         }
         return 0;
     }
-    if (number == MYOS_SYS_READ) {
+    if (number == CLONK_SYS_READ) {
         uint64_t flags;
         if (arg2 != 1U || !vm_user_range_valid(address_space, arg1, 1U) ||
             !vm_user_range_writable(address_space, arg1, 1U) ||
@@ -174,12 +174,12 @@ int64_t syscall_dispatch(const uint64_t *saved_registers) {
         }
         return 1;
     }
-    if (number == MYOS_SYS_CLEAR) {
+    if (number == CLONK_SYS_CLEAR) {
         if (arg1 != 0U || arg2 != 0U) return -1;
         kclear();
         return 0;
     }
-    if (number == MYOS_SYS_EXIT) {
+    if (number == CLONK_SYS_EXIT) {
         if (process_current_pid() == 1U) {
             if (!process_prepare_init_exit()) return -1;
             keyboard_set_user_mode(false);
@@ -188,26 +188,26 @@ int64_t syscall_dispatch(const uint64_t *saved_registers) {
         if (!process_exit_current((int64_t)arg1)) return -1;
         return 0;
     }
-    if (number == MYOS_SYS_SPAWN) {
+    if (number == CLONK_SYS_SPAWN) {
         if (arg2 != 0U || arg3 != 0U) return -1;
-        char path[MYOS_FS_MAX_PATH];
+        char path[CLONK_FS_MAX_PATH];
         if (!copy_executable_path(address_space, arg1, path)) return -1;
         struct limine_file *module = find_spawn_module(path);
         if (module == NULL || module->address == NULL || module->size == 0U) {
-            return MYOS_PROCESS_ERR_NOT_FOUND;
+            return CLONK_PROCESS_ERR_NOT_FOUND;
         }
         return process_spawn_image(module->address, (size_t)module->size);
     }
-    if (number == MYOS_SYS_WAIT) {
+    if (number == CLONK_SYS_WAIT) {
         if (arg3 != 0U) return -1;
         return process_wait(arg1, arg2);
     }
-    if (number == MYOS_SYS_YIELD) {
+    if (number == CLONK_SYS_YIELD) {
         if (arg1 != 0U || arg2 != 0U || arg3 != 0U) return -1;
         process_request_yield();
         return 0;
     }
-    if (number == MYOS_SYS_GETPID) {
+    if (number == CLONK_SYS_GETPID) {
         if (arg1 != 0U || arg2 != 0U || arg3 != 0U) return -1;
         return (int64_t)process_current_pid();
     }

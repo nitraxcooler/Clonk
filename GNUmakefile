@@ -14,8 +14,8 @@ BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
 ISO_STAGE_DIR = $(BUILD_DIR)/iso_root
 ISO_BOOT_DIR = $(ISO_STAGE_DIR)/boot
-KERNEL = $(BUILD_DIR)/myos.elf
-ISO = $(BUILD_DIR)/myos.iso
+KERNEL = $(BUILD_DIR)/clonk.elf
+ISO = $(BUILD_DIR)/clonk.iso
 LIMINE_DIR = third_party/limine
 ifeq ($(OS),Windows_NT)
 LIMINE_TOOL = $(LIMINE_DIR)/limine.exe
@@ -76,7 +76,7 @@ OBJS = $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(C_SOURCES)) \
 DEPS = $(OBJS:.o=.d)
 
 ISO_CONFIG = $(ISO_BOOT_DIR)/limine.conf
-ISO_KERNEL = $(ISO_BOOT_DIR)/myos.elf
+ISO_KERNEL = $(ISO_BOOT_DIR)/clonk.elf
 ISO_FATIMG = $(ISO_BOOT_DIR)/fat32.img
 ISO_INIT = $(ISO_BOOT_DIR)/init.elf
 ISO_SCHED_A = $(ISO_BOOT_DIR)/sched-a.elf
@@ -91,7 +91,7 @@ FATIMG_SRC = tools/make_fat32_img.py
 FATIMG = $(BUILD_DIR)/fat32.img
 AHCI_TEST_IMAGE = $(BUILD_DIR)/ahci-test.img
 AHCI_TEST_SECTORS = 131072
-AHCI_ISO = $(BUILD_DIR)/myos-ahci.iso
+AHCI_ISO = $(BUILD_DIR)/clonk-ahci.iso
 AHCI_ISO_STAGE_DIR = $(BUILD_DIR)/ahci_iso_root
 AHCI_ISO_CONFIG = $(AHCI_ISO_STAGE_DIR)/boot/limine.conf
 ISO_LIMINE_FILES = \

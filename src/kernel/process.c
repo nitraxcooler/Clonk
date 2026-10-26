@@ -280,10 +280,10 @@ userfs_context *process_current_userfs(void) {
 
 int64_t process_spawn_image(const void *image, size_t image_size) {
     if (current_process < 0 || image == NULL || image_size == 0U) {
-        return MYOS_PROCESS_ERR_INVALID;
+        return CLONK_PROCESS_ERR_INVALID;
     }
     int slot = find_free_slot();
-    if (slot < 0) return MYOS_PROCESS_ERR_LIMIT;
+    if (slot < 0) return CLONK_PROCESS_ERR_LIMIT;
 
     process_task task;
     memset(&task, 0, sizeof(task));
@@ -292,7 +292,7 @@ int64_t process_spawn_image(const void *image, size_t image_size) {
     if (task.kernel_stack == 0U || task.filesystem == NULL) {
         if (task.filesystem != NULL) userfs_destroy_context(task.filesystem);
         if (task.kernel_stack != 0U) kfree((void *)(uintptr_t)task.kernel_stack);
-        return MYOS_PROCESS_ERR_NO_MEMORY;
+        return CLONK_PROCESS_ERR_NO_MEMORY;
     }
 
     uint64_t entry_point = 0U;
@@ -301,7 +301,7 @@ int64_t process_spawn_image(const void *image, size_t image_size) {
                        &entry_point, &stack_pointer)) {
         userfs_destroy_context(task.filesystem);
         kfree((void *)(uintptr_t)task.kernel_stack);
-        return MYOS_PROCESS_ERR_INVALID;
+        return CLONK_PROCESS_ERR_INVALID;
     }
 
     task.kernel_stack_top =
@@ -318,7 +318,7 @@ int64_t process_spawn_image(const void *image, size_t image_size) {
         userfs_destroy_context(task.filesystem);
         (void)vm_destroy_address_space(task.address_space);
         kfree((void *)(uintptr_t)task.kernel_stack);
-        return MYOS_PROCESS_ERR_LIMIT;
+        return CLONK_PROCESS_ERR_LIMIT;
     }
     task.pid = next_process_id++;
     task.parent_pid = process_table[current_process].pid;
@@ -329,22 +329,22 @@ int64_t process_spawn_image(const void *image, size_t image_size) {
 
 int64_t process_wait(uint64_t pid, uint64_t status_address) {
     if (current_process < 0 || pid == 0U || pid == process_current_pid()) {
-        return MYOS_PROCESS_ERR_INVALID;
+        return CLONK_PROCESS_ERR_INVALID;
     }
     process_task *parent = &process_table[current_process];
     process_task *child = find_process(pid);
     if (child == NULL || child->parent_pid != parent->pid) {
-        return MYOS_PROCESS_ERR_INVALID;
+        return CLONK_PROCESS_ERR_INVALID;
     }
     if (status_address != 0U &&
         !vm_user_range_writable(parent->address_space, status_address,
-                                sizeof(int64_t))) return MYOS_PROCESS_ERR_INVALID;
+                                sizeof(int64_t))) return CLONK_PROCESS_ERR_INVALID;
 
     if (child->state == PROCESS_ZOMBIE) {
         int64_t status = child->exit_status;
         if (status_address != 0U &&
             !user_copy_to(parent->address_space, status_address,
-                          &status, sizeof(status))) return MYOS_PROCESS_ERR_INVALID;
+                          &status, sizeof(status))) return CLONK_PROCESS_ERR_INVALID;
         reap_task(child);
         return (int64_t)pid;
     }
