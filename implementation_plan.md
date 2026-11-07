@@ -2,7 +2,7 @@
 
 ## Goal
 
-Track incremental development of the existing Clonk x86-64 kernel while preserving and reusing its PMM, VMM, IDT, panic, CLI, and Limine boot architecture. Clonk now has a bounded **Ring 3 process and round-robin scheduling foundation** and a QEMU-validated **AHCI persistent FAT32 test path** alongside its heap, diagnostics, block-device, VFS, and FAT32 infrastructure. ClonkFS and general filesystem-based process creation remain future work.
+Track incremental development of the existing Clonk x86-64 kernel while preserving and reusing its PMM, VMM, IDT, panic, CLI, and Limine boot architecture. Clonk now has a bounded **Ring 3 process and round-robin scheduling foundation**, **filesystem-backed static ELF execution**, and a QEMU-validated **AHCI persistent FAT32 test path** alongside its heap, diagnostics, block-device, VFS, and FAT32 infrastructure. ClonkFS remains future work.
 
 ## Scope & Context
 
@@ -130,12 +130,32 @@ fallback. These tests validate only the QEMU ICH9 setup; physical hardware,
 unsupported-sector devices, and forced timeout/error injection were not
 tested.
 
-There is no dynamic linker, argv/env setup, libc, seek, or general
-filesystem-based executable loader. NX protection is enabled when supported
-by the CPU; processors without NX cannot enforce non-executable data pages.
-Physical hardware has not been tested. The older planning sections below
-describe other subsystems and future work; this current-state summary takes
-precedence where they disagree.
+Filesystem executable loading is capped at 1 MiB per file image. `SPAWN`
+copies and validates a bounded user path using the same normalization as
+filesystem syscalls, opens a regular file through VFS, and reads it in
+512-byte-or-smaller chunks into temporary kernel heap memory. It rejects
+empty, oversized, directory, incomplete, and unreadable files before calling
+the existing loader. The temporary buffer and VFS handle are released on
+success and failure; the ELF loader maps segment contents into the new
+address space rather than retaining the source image. `exec PATH` in `/init`
+waits for the new process and reports its exit status.
+
+The generated FAT32 image contains `HELLO.ELF` (exit 0), `EXIT.ELF` (exit 42),
+and the scheduler regression programs as ordinary files with cluster chains.
+The existing `run` harness continues to exercise scheduler interleaving,
+isolation, user-fault termination, and process-table exhaustion through those
+files. Empty, malformed, and over-limit test files exercise the spawn error
+paths. The standard image is regenerated from the ELF build outputs. The AHCI
+image is generated with the same files when it does not already exist; an
+existing persistent AHCI test image is preserved.
+
+There is no dynamic linker, PIE, shared libraries, argv/env setup, libc, seek,
+or POSIX compatibility. FAT32 retains its 8.3 filename restrictions. The
+single-CPU scheduler remains non-preemptible while executing kernel code. NX
+protection is enabled when supported by the CPU; processors without NX cannot
+enforce non-executable data pages. Physical hardware has not been tested. The
+older planning sections below describe other subsystems and future work; this
+current-state summary takes precedence where they disagree.
 
 ## Process management and scheduler — implemented foundation
 
@@ -168,12 +188,11 @@ runnable; Ring 0 exceptions continue to use the kernel panic path.
 
 The process ABI keeps the established syscall IDs unchanged and adds
 `SPAWN=13`, `WAIT=14`, `YIELD=15`, and `GETPID=16` in `src/abi/syscall.h`.
-`SPAWN` accepts the bundled `/boot/sched-a.elf`,
-`/boot/sched-b.elf`, and `/boot/sched-fault.elf` programs; a separate bundled
-malformed image is used to verify rejection. Filesystem executable loading,
-general argument vectors, and environment setup are not implemented. `WAIT`
-takes a child PID and an optional validated
-writable status pointer. `YIELD` requests a scheduling decision, and
+`SPAWN` accepts a normalized filesystem path and loads the regular file via
+VFS; the scheduler test programs and malformed image are FAT32 files, not
+spawnable Limine modules. General argument vectors and environment setup are
+not implemented. `WAIT` takes a child PID and an optional validated writable
+status pointer. `YIELD` requests a scheduling decision, and
 `GETPID` returns the current PID. The process table and resource limits return
 errors rather than exposing kernel objects to userspace.
 
@@ -189,6 +208,17 @@ exception 6/status `-134`, and all slots being reusable afterward. Existing
 userspace filesystem commands, the kernel-shell self-tests, and `/init`'s
 return to the kernel shell also passed in QEMU. These tests are not a formal
 memory-safety proof or physical-hardware validation.
+
+The filesystem execution milestone was also exercised interactively in QEMU:
+`exec /HELLO.ELF` printed its greeting and returned status 0, repeated
+execution succeeded, and `exec /EXIT.ELF` returned status 42. Missing,
+directory, empty, non-ELF, and over-limit files were rejected. Two RAM-disk
+scheduler runs and one AHCI scheduler run passed, with the AHCI boot also
+executing both test ELFs. The RAM-disk image was checked for matching FAT
+copies, correct file contents, and multi-cluster chains. ELF self-tests
+covered malformed headers, architecture, program-header offsets, segment
+bounds/overflow, and page reclamation. Device read-error injection and
+numerical heap/page-count comparisons remain untested.
 
 ## High-level approach
 

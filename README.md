@@ -25,8 +25,10 @@ kernel shell when `/init` exits. The runtime `version` command reports
 - Interactive Ring 3 `/init` shell that remains active until it exits
 - Eight-slot process table, per-process kernel stacks and filesystem handles,
   parent wait/exit handling, and PIT-driven single-CPU round-robin scheduling
-- Bundled Ring 3 process tests for task interleaving, memory isolation,
-  process-table limits, and user-fault isolation
+- Filesystem-backed static ELF64 process creation with a bounded 1 MiB image
+  limit and parent `WAIT`/exit-status handling
+- Ring 3 process tests for task interleaving, memory isolation, process-table
+  limits, user-fault isolation, and filesystem executable loading
 - Block-device registry, Limine-module-backed RAM disk, VFS, and FAT32
   filesystem operations
 - PCI enumeration and an AHCI SATA driver with bounded LBA48 DMA reads,
@@ -93,6 +95,7 @@ display.
 | `rm PATH` | Remove a file; directories are rejected |
 | `mkdir PATH` | Create a directory |
 | `rmdir PATH` | Remove an empty directory |
+| `exec PATH` | Load a static ELF64 executable from FAT32, run it, and wait |
 | `run` | Run bundled process tests and wait for all children |
 
 For `write`, the first whitespace-delimited argument is the path and the
@@ -125,19 +128,34 @@ and a signed result is returned in `RAX`.
 | `FS_MKDIR` | `RDI=path` | `0` on success |
 | `FS_UNLINK` | `RDI=path` | `0` on success |
 | `FS_RMDIR` | `RDI=path` | `0` on success; non-empty directories are rejected |
-| `SPAWN` | `RDI=module path`, `RSI=0`, `RDX=0` | Child PID, or `-1` invalid ELF/arguments, `-3` missing module, `-8` allocation failure, `-11` table full |
+| `SPAWN` | `RDI=filesystem path`, `RSI=0`, `RDX=0` | Child PID, or a negative process/path/ELF/filesystem error |
 | `WAIT` | `RDI=child PID`, `RSI=optional writable status address`, `RDX=0` | Child PID after exit, or `-1` for invalid PID, parent, or buffer |
 | `YIELD` | All arguments zero | `0`; another runnable task runs when available |
 | `GETPID` | All arguments zero | Current process ID |
 
 The process table has eight slots, including PID 1 for `/init`. Child
 processes have independent user address spaces, four-page user stacks, 16 KiB
-kernel stacks, and filesystem descriptor tables. `SPAWN` currently recognizes
-the bundled `/boot/sched-a.elf`, `/boot/sched-b.elf`,
-`/boot/sched-fault.elf`, and malformed-ELF regression module; the malformed
-image is rejected and never registered. Executables are not loaded from the
-mounted filesystem. The loader supports the existing bounded static x86-64
-ELF64 `ET_EXEC` subset.
+kernel stacks, and filesystem descriptor tables. `SPAWN` copies and validates
+the user path, opens a regular file through VFS, reads it in bounded chunks,
+and passes the temporary image to the existing ELF loader. Temporary image
+memory and the VFS handle are released before the syscall returns; loaded
+segments reside in the child's private address space. The maximum file-image
+size is 1 MiB. `exec PATH` invokes `SPAWN`, waits for the child, and reports its
+exit status. For example, `exec /HELLO.ELF` prints a greeting and exits with
+status 0, while `exec /EXIT.ELF` exits with status 42.
+
+The loader supports only static, x86-64 ELF64 `ET_EXEC` files in its existing
+bounded subset. Dynamic linking, PIE, shared libraries, command-line
+arguments, and environment variables are not supported. Paths follow the
+filesystem's 8.3 FAT filename rules and reject `.` and `..` components. The
+`run` command remains a separate scheduler regression harness; its scheduler
+and malformed-image fixtures are now files in the generated FAT32 image
+instead of spawnable Limine modules.
+
+Process errors use the existing meanings for invalid ELF/arguments (`-1`),
+missing file (`-3`), allocation failure (`-8`), and process-table exhaustion
+(`-11`). Invalid paths return `-2`, a directory returns `-4`, VFS read failures
+return `-12`, and images larger than 1 MiB return `-14`.
 
 The PIT runs at 100 Hz through the existing 8259 PIC. Timer interrupts
 reschedule only from Ring 3 frames using the saved-register/`iretq` format.
@@ -217,6 +235,10 @@ the mounted namespace.
 - **FAT32:** the current filesystem backend supports file and directory
   operations, but names use the FAT 8.3 format. The on-disk file-size field is
   32-bit; long filenames and filesystem permissions are not implemented.
+  The image generator places `HELLO.ELF`, `EXIT.ELF`, scheduler fixtures, and
+  negative-test files into ordinary FAT directory entries with allocated
+  cluster chains; executable ELF outputs are build dependencies of both
+  standard and AHCI image generation.
   The VFS has metadata lookup, but no metadata syscall is provided to
   userspace. `FS_UNLINK` removes files; `FS_RMDIR` removes only empty
   directories.
@@ -268,7 +290,7 @@ Clonk/
 │   ├── kernel/             # Startup, memory, ELF, processes, syscalls, panic
 │   ├── lib/                # Freestanding memory and string helpers
 │   ├── shell/              # Kernel command shell
-│   └── userspace/          # `/init`, scheduler test programs, linker script
+│   └── userspace/          # `/init`, executable and scheduler test programs
 ├── iso_root/               # Limine boot configuration
 ├── third_party/limine/     # Included Limine files/tools
 ├── tools/                  # FAT32 image generation
@@ -392,7 +414,8 @@ busy-looped without yielding, demonstrating PIT-driven Ring 3 preemption.
 Each test also checked private data and stack counters. The invalid-opcode
 child was reported as exception 6 with status `-134`; all other children
 returned status 0, and the remaining tasks continued. Missing and malformed
-module paths, invalid syscall arguments and wait buffers, and process-table
+filesystem executables, invalid pointers and paths, directories, empty and
+over-limit files, invalid syscall arguments and wait buffers, and process-table
 exhaustion were exercised by `run`.
 
 After the handoff, kernel-shell `help`, `ls`, `cat`, `blkinfo`, and
@@ -411,6 +434,20 @@ another boot. A no-controller run halted with an explicit error and did not
 launch userspace or fall back to the RAM disk. These results validate only
 the tested QEMU configuration; physical hardware, unsupported sector sizes,
 injected ATA timeouts, and crash recovery were not tested.
+
+For filesystem-backed execution, the rebuilt RAM-disk image was booted in
+QEMU and the interactive shell ran `/HELLO.ELF` twice (status 0) and
+`/EXIT.ELF` (status 42). Missing paths, the root directory, an empty file, a
+non-ELF file, and a file over the 1 MiB cap were rejected with their expected
+errors. The `run` syscall checks also passed for malformed/unterminated paths,
+invalid user pointers, malformed ELF, and process-table exhaustion. Two
+consecutive scheduler runs reaped and reused all child slots. Boot-time ELF
+self-tests cover truncated headers, unsupported architecture, invalid
+program-header offsets, segment bounds/overflow, and page/resource cleanup.
+The AHCI image was generated with the same executable files, booted in QEMU,
+and successfully ran both ELF programs and the scheduler regression suite.
+Numerical heap/page-count comparisons and injected block-device read failures
+were not performed.
 
 ## Roadmap
 
@@ -436,6 +473,8 @@ injected ATA timeouts, and crash recovery were not tested.
 - Bounded process manager and process-owned filesystem handles
 - PIT/PIC round-robin preemption, process syscalls, child exit/wait, and safe
   address-space/kernel-stack reclamation
+- Filesystem-backed static ELF64 `ET_EXEC` process creation and `/init` `exec`
+  command with exit-status reporting
 - QEMU evidence for multiple interleaved Ring 3 tasks, isolated data and
   stacks, user-fault isolation, table exhaustion, and repeated spawn/reap
   cycles
@@ -443,11 +482,9 @@ injected ATA timeouts, and crash recovery were not tested.
 ### In Progress
 
 - ClonkFS native filesystem design and implementation
-- Loading user executables from the mounted filesystem
 
 ### Planned
 
-- General executable loading and process creation beyond bundled modules
 - Broader storage-driver and hardware support beyond the tested QEMU AHCI path
 - Additional userspace programs and runtime support
 - Networking and audio
@@ -459,9 +496,10 @@ The scheduler is single-CPU and bounded to eight tasks. Timer preemption
 occurs only at Ring 3 interrupt frames; Ring 0 work is not preempted. The
 existing keyboard `READ` syscall waits inside the kernel, so a task blocked
 there can delay other runnable tasks until input arrives. Process creation
-currently supports only the bundled test modules, not filesystem executables.
-There is no dynamic linker, libc, argv/environment setup, or POSIX process
-API. The ELF loader supports a bounded static ELF64 `ET_EXEC` subset. User
+loads regular files through VFS, with a 1 MiB image limit and the existing
+bounded static ELF64 `ET_EXEC` subset. There is no dynamic linker, PIE, shared
+libraries, libc, argv/environment setup, or POSIX process API. FAT32 paths
+retain 8.3 filename restrictions. User
 exceptions terminate only the affected task; kernel exceptions retain the
 kernel panic path. The standard writable root is a volatile FAT32 image.
 The optional AHCI root is validated only with QEMU's ICH9 controller and a

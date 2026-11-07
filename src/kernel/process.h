@@ -8,6 +8,7 @@
 #include "kernel/userfs.h"
 
 #define PROCESS_TABLE_LIMIT 8U
+#define PROCESS_EXECUTABLE_MAX_SIZE (1024U * 1024U)
 
 bool process_manager_start_init(uint64_t address_space);
 uint64_t process_current_address_space(void);

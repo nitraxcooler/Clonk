@@ -307,6 +307,7 @@ static void print_help(void) {
         "  rm PATH       Remove a file\n"
         "  mkdir PATH    Create a directory\n"
         "  rmdir PATH    Remove an empty directory\n"
+        "  exec PATH     Load and run a filesystem ELF program\n"
         "  run           Run the bundled process scheduler tests\n"
         "  exit          Return to the kernel shell\n";
     (void)write_text(help);
@@ -349,6 +350,53 @@ static void print_filesystem_error(const char *command, int64_t error) {
     (void)write_text(": ");
     (void)write_text(filesystem_error_text(error));
     (void)write_text("\n");
+}
+
+static const char *process_error_text(int64_t error) {
+    switch (error) {
+        case CLONK_PROCESS_ERR_INVALID: return "invalid or unsupported ELF executable";
+        case CLONK_PROCESS_ERR_PATH: return "invalid or unterminated path";
+        case CLONK_PROCESS_ERR_NOT_FOUND: return "executable not found";
+        case CLONK_PROCESS_ERR_IS_DIRECTORY: return "path is a directory";
+        case CLONK_PROCESS_ERR_NO_MEMORY: return "out of memory";
+        case CLONK_PROCESS_ERR_LIMIT: return "process table is full";
+        case CLONK_PROCESS_ERR_IO: return "filesystem I/O error";
+        case CLONK_PROCESS_ERR_IMAGE_LIMIT: return "executable exceeds the 1 MiB image limit";
+        default: return "process creation failed";
+    }
+}
+
+static void command_exec(const char *path) {
+    (void)write_text("Loading ");
+    (void)write_text(path);
+    (void)write_text("...\n");
+
+    int64_t pid = syscall2(CLONK_SYS_SPAWN, (uint64_t)(uintptr_t)path, 0U);
+    if (pid < 0) {
+        (void)write_text("exec: ");
+        (void)write_text(process_error_text(pid));
+        (void)write_text("\n");
+        return;
+    }
+
+    (void)write_text("Created process PID ");
+    write_signed_number(pid);
+    (void)write_text("\n");
+
+    int64_t status = INT64_MIN;
+    int64_t waited = syscall2(CLONK_SYS_WAIT, (uint64_t)pid,
+                              (uint64_t)(uintptr_t)&status);
+    if (waited != pid) {
+        (void)write_text("exec: wait failed; return value ");
+        write_signed_number(waited);
+        (void)write_text("\n");
+        return;
+    }
+    (void)write_text("Process ");
+    write_signed_number(pid);
+    (void)write_text(" exited with status ");
+    write_signed_number(status);
+    (void)write_text(".\n");
 }
 
 static void command_ls(const char *path) {
@@ -500,23 +548,36 @@ static void command_rm(const char *path) {
 
 static void command_run(void) {
     static const char *paths[] = {
-        "/boot/sched-a.elf",
-        "/boot/sched-b.elf",
-        "/boot/sched-fault.elf",
-        "/boot/sched-a.elf",
-        "/boot/sched-b.elf",
-        "/boot/sched-a.elf",
-        "/boot/sched-b.elf"
+        "/SCHED-A.ELF",
+        "/SCHED-B.ELF",
+        "/FAULT.ELF",
+        "/SCHED-A.ELF",
+        "/SCHED-B.ELF",
+        "/SCHED-A.ELF",
+        "/SCHED-B.ELF"
     };
     int64_t pids[sizeof(paths) / sizeof(paths[0])];
     size_t count = 0U;
     size_t successful = 0U;
+    static char unterminated_path[CLONK_FS_MAX_PATH];
+    for (size_t i = 0; i < sizeof(unterminated_path); ++i) {
+        unterminated_path[i] = 'A';
+    }
 
-    if (syscall2(CLONK_SYS_SPAWN, (uint64_t)(uintptr_t)"/boot/missing.elf",
+    if (syscall2(CLONK_SYS_SPAWN, (uint64_t)(uintptr_t)"/MISSING.ELF",
                  0U) != -3 ||
         syscall2(CLONK_SYS_SPAWN,
-                 (uint64_t)(uintptr_t)"/boot/sched-invalid.elf", 0U) != -1 ||
-        syscall2(CLONK_SYS_SPAWN, 0xFFFFFFFF80000000ULL, 0U) != -1 ||
+                 (uint64_t)(uintptr_t)"/BAD.ELF", 0U) != -1 ||
+        syscall2(CLONK_SYS_SPAWN,
+                 (uint64_t)(uintptr_t)"/EMPTY.ELF", 0U) != -1 ||
+        syscall2(CLONK_SYS_SPAWN,
+                 (uint64_t)(uintptr_t)"/TOOBIG.ELF", 0U) != -14 ||
+        syscall2(CLONK_SYS_SPAWN, (uint64_t)(uintptr_t)"/", 0U) != -4 ||
+        syscall2(CLONK_SYS_SPAWN,
+                 (uint64_t)(uintptr_t)"/BAD..ELF", 0U) != -2 ||
+        syscall2(CLONK_SYS_SPAWN,
+                 (uint64_t)(uintptr_t)unterminated_path, 0U) != -2 ||
+        syscall2(CLONK_SYS_SPAWN, 0xFFFFFFFF80000000ULL, 0U) != -2 ||
         syscall2(CLONK_SYS_WAIT, UINT64_MAX, 0U) != -1 ||
         syscall2(CLONK_SYS_GETPID, 1U, 0U) != -1 ||
         syscall2(CLONK_SYS_YIELD, 1U, 0U) != -1) {
@@ -639,6 +700,14 @@ static void run_command(char *line) {
             (void)write_text("Usage: write PATH TEXT\n");
         } else {
             command_write(path, cursor);
+        }
+    } else if (strings_equal(command, command_length, "exec")) {
+        char *cursor = arguments;
+        char *path = next_token(&cursor);
+        if (path == NULL || *cursor != '\0') {
+            (void)write_text("Usage: exec PATH\n");
+        } else {
+            command_exec(path);
         }
     } else if (strings_equal(command, command_length, "run") &&
                *arguments == '\0') {

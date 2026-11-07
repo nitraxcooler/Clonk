@@ -90,8 +90,9 @@ static bool normalize_user_path(char path[CLONK_FS_MAX_PATH]) {
     return true;
 }
 
-static int copy_user_path(uint64_t address_space, uint64_t user_path,
-                          char path[CLONK_FS_MAX_PATH]) {
+int userfs_copy_path(uint64_t address_space, uint64_t user_path,
+                     char path[CLONK_FS_MAX_PATH]) {
+    if (path == NULL) return CLONK_FS_ERR_PATH;
     const uint64_t user_limit = 0x0000800000000000ULL;
     if (user_path >= user_limit) return CLONK_FS_ERR_PATH;
 
@@ -164,7 +165,7 @@ static int64_t syscall_open(userfs_context *context, uint64_t address_space,
     }
 
     char path[CLONK_FS_MAX_PATH];
-    int path_rc = copy_user_path(address_space, user_path, path);
+    int path_rc = userfs_copy_path(address_space, user_path, path);
     if (path_rc != 0) return path_rc;
     size_t free_slot = CLONK_FS_HANDLE_LIMIT;
     for (size_t i = 0; i < CLONK_FS_HANDLE_LIMIT; ++i) {
@@ -295,7 +296,7 @@ static int64_t syscall_close(userfs_context *context, uint64_t descriptor) {
 static int64_t syscall_path_operation(uint64_t address_space, uint64_t user_path,
                                       unsigned int operation) {
     char path[CLONK_FS_MAX_PATH];
-    int rc = copy_user_path(address_space, user_path, path);
+    int rc = userfs_copy_path(address_space, user_path, path);
     if (rc != 0) return rc;
     if (operation == 0U) {
         rc = vfs_unlink(path);

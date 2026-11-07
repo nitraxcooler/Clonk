@@ -9,12 +9,15 @@
 #include "arch/x86_64/io.h"
 #include "boot/limine.h"
 #include "drivers/keyboard/keyboard.h"
+#include "fs/vfs.h"
 #include "kernel/elf.h"
+#include "kernel/heap.h"
 #include "kernel/panic.h"
 #include "kernel/process.h"
 #include "kernel/usercopy.h"
 #include "kernel/userfs.h"
 #include "kernel/vmm.h"
+#include "lib/mem.h"
 #include "lib/string.h"
 
 #define USER_OUTPUT_COLOR 0xFFFFFFU
@@ -73,29 +76,71 @@ static struct limine_file *find_init_module(void) {
     return find_module("init.elf");
 }
 
-static bool copy_executable_path(uint64_t address_space, uint64_t user_path,
-                                char path[CLONK_FS_MAX_PATH]) {
-    if (user_path >= 0x0000800000000000ULL) return false;
-    for (size_t i = 0; i < CLONK_FS_MAX_PATH; ++i) {
-        if ((uint64_t)i > 0x0000800000000000ULL - user_path ||
-            !user_copy_from(address_space, &path[i], user_path + i, 1U)) {
-            return false;
-        }
-        if (path[i] == '\0') return i != 0U;
+static int64_t spawn_vfs_file(uint64_t address_space, uint64_t user_path) {
+    char path[CLONK_FS_MAX_PATH];
+    if (userfs_copy_path(address_space, user_path, path) != 0) {
+        return CLONK_PROCESS_ERR_PATH;
     }
-    return false;
-}
 
-static struct limine_file *find_spawn_module(const char *path) {
-    if (strcmp(path, "/boot/sched-a.elf") == 0) return find_module("sched-a.elf");
-    if (strcmp(path, "/boot/sched-b.elf") == 0) return find_module("sched-b.elf");
-    if (strcmp(path, "/boot/sched-fault.elf") == 0) {
-        return find_module("sched-fault.elf");
+    vfs_file file;
+    memset(&file, 0, sizeof(file));
+    int rc = vfs_open(path, &file);
+    if (rc != 0) {
+        if (rc == VFS_ERR_NOT_FOUND) return CLONK_PROCESS_ERR_NOT_FOUND;
+        if (rc == VFS_ERR_INVALID) return CLONK_PROCESS_ERR_PATH;
+        if (rc == VFS_ERR_IS_DIRECTORY) {
+            return CLONK_PROCESS_ERR_IS_DIRECTORY;
+        }
+        if (rc == VFS_ERR_NOT_DIRECTORY) return CLONK_PROCESS_ERR_PATH;
+        if (rc == VFS_ERR_NO_MEMORY) return CLONK_PROCESS_ERR_NO_MEMORY;
+        return CLONK_PROCESS_ERR_IO;
     }
-    if (strcmp(path, "/boot/sched-invalid.elf") == 0) {
-        return find_module("sched-invalid.elf");
+
+    if (file.type != VFS_TYPE_FILE) {
+        vfs_close(&file);
+        return CLONK_PROCESS_ERR_IS_DIRECTORY;
     }
-    return NULL;
+    if (file.size == 0U) {
+        vfs_close(&file);
+        return CLONK_PROCESS_ERR_INVALID;
+    }
+    if (file.size > PROCESS_EXECUTABLE_MAX_SIZE ||
+        file.size > (uint64_t)SIZE_MAX) {
+        vfs_close(&file);
+        return CLONK_PROCESS_ERR_IMAGE_LIMIT;
+    }
+
+    size_t image_size = (size_t)file.size;
+    uint8_t *image = (uint8_t *)kmalloc(image_size);
+    if (image == NULL) {
+        vfs_close(&file);
+        return CLONK_PROCESS_ERR_NO_MEMORY;
+    }
+
+    uint64_t offset = 0U;
+    bool read_ok = true;
+    while (offset < file.size) {
+        uint64_t request = file.size - offset;
+        if (request > CLONK_FS_MAX_TRANSFER) request = CLONK_FS_MAX_TRANSFER;
+        uint64_t received = 0U;
+        rc = vfs_read(&file, offset, request, image + (size_t)offset, &received);
+        if (rc != 0 || received == 0U || received > request ||
+            received > file.size - offset) {
+            read_ok = false;
+            break;
+        }
+        offset += received;
+    }
+
+    vfs_close(&file);
+    if (!read_ok || offset != (uint64_t)image_size) {
+        kfree(image);
+        return CLONK_PROCESS_ERR_IO;
+    }
+
+    int64_t result = process_spawn_image(image, image_size);
+    kfree(image);
+    return result;
 }
 
 void process_return_to_kernel(void) {
@@ -190,13 +235,7 @@ int64_t syscall_dispatch(const uint64_t *saved_registers) {
     }
     if (number == CLONK_SYS_SPAWN) {
         if (arg2 != 0U || arg3 != 0U) return -1;
-        char path[CLONK_FS_MAX_PATH];
-        if (!copy_executable_path(address_space, arg1, path)) return -1;
-        struct limine_file *module = find_spawn_module(path);
-        if (module == NULL || module->address == NULL || module->size == 0U) {
-            return CLONK_PROCESS_ERR_NOT_FOUND;
-        }
-        return process_spawn_image(module->address, (size_t)module->size);
+        return spawn_vfs_file(address_space, arg1);
     }
     if (number == CLONK_SYS_WAIT) {
         if (arg3 != 0U) return -1;
